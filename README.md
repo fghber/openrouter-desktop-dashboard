@@ -1,59 +1,184 @@
 # OpenRouter Dashboard
+
+A Windows desktop dashboard built with `tkinter` for monitoring OpenRouter usage and spend.
+
+## Features
+
+- Real-time monitoring of OpenRouter API usage and credits
+- Compact "Dynamic Island" style UI that can expand to show detailed statistics
+- Automatic refresh of data at configurable intervals
+- System tray-like behavior (minimizes to a small capsule when not expanded)
+- Position persistence and edge snapping for window placement
+- Currency toggle between USD, CNY, EUR, GBP, JPY, and more (with automatic exchange rate fetching)
+- Support for multiple API keys (aggregated usage) and optional management key for detailed analytics
+- API keys encrypted in config.json using machine-specific encryption (toggleable in Settings)
+- Right-click context menu for settings, refresh, pinning, and exit
+- Configurable refresh rate, window transparency, and timezone
+
+## Installation
+
+1. **Prerequisites**
+   - Python 3.9 or higher
+   - Windows operating system
+
+2. **Install Dependencies**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. **Configuration**
+   - Copy `config.example.json` to `config.json`
+   - Edit `config.json` to add your OpenRouter API key(s) and adjust settings as needed
+   - The app will look for `config.json` in the same directory as the executable or script
+
+## Usage
+
+### Running the Application
+
+```bash
+python main.py
+```
+
+### Configuration Options
+
+The `config.json` file supports the following fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `api_key` | string | Primary OpenRouter API key (required) |
+| `refresh_sec` | number | Refresh interval in seconds (default: 30) |
+| `x`, `y` | number | Window position (saved automatically) |
+| `alpha` | number | Window transparency (0.0-1.0, default: 0.9) |
+| `timezone` | string | IANA timezone for displaying times (default: "local") |
+| `extra_keys` | array | Additional API keys to aggregate usage for |
+| `mgmt_key` | string | Optional management key for detailed model analytics |
+| `pinned` | boolean | Whether window stays on top (default: false) |
+| `currency` | string | Display currency code (default: "USD"). Supported: USD, CNY, EUR, GBP, JPY, CAD, AUD, CHF, INR, KRW, BRL, RUB, TRY, ZAR, SGD, HKD, TWD, MYR, THB, IDR |
+| `currency_rate` | number | Exchange rate from USD to selected currency (default: 1.0). Can be fetched automatically via the "↻ Fetch" button in Settings |
+| `island_state` | string | UI state: "island" (collapsed) or "expanded" (default: "island") |
+| `encrypt_keys` | boolean | Whether to encrypt API keys in config.json (default: true). Toggle in Settings with lock button |
+
+### UI Interaction
+
+- **Left-click and drag**: Move the window (snaps to screen edges)
+- **Right-click**: Open context menu with options:
+  - Pin/Unpin: Keep window always on top
+  - Settings: Open configuration dialog
+  - Refresh: Manually trigger data update
+  - Exit: Close the application
+- **Double-click**: Toggle between island (collapsed) and expanded states
+- **Currency toggle**: Click the currency symbol in the title bar to cycle through supported currencies (USD → CNY → EUR → GBP → JPY → ...)
+
+## Building the Executable
+
+To create a standalone Windows executable using PyInstaller:
+
+```bash
+pip install pyinstaller
+pyinstaller --onefile --windowed --name OpenRouter-Dashboard main.py
+```
+
+The executable will be generated in the `dist` folder.
+
+## How It Works
+
+- The application uses the OpenRouter API to fetch:
+  - Authentication information (`/auth/key`)
+  - Credit balance (`/credits`)
+  - Recent activity (`/activity`)
+- Data is refreshed automatically in a background thread to avoid blocking the UI
+- Usage statistics are calculated for daily and monthly periods
+- When an `mgmt_key` is provided, additional endpoints are used for:
+  - Monthly model usage top 3
+  - Daily breakdown by model
+
+## Notes
+
+- API keys are stored locally in `config.json` - treat this file as sensitive
+- The application does not collect or transmit any personal data
+- For security, consider using API keys with limited permissions if concerned
+- The UI is designed to be minimal and non-intrusive, following macOS Dynamic Island principles
+
+## Troubleshooting
+
+- **Application won't start**: Ensure Python 3.9+ is installed and dependencies are met
+- **No data showing**: Verify your API key is valid and has sufficient permissions
+- **Window not appearing**: Check if the window is positioned off-screen (delete config.json to reset)
+- **High CPU usage**: Increase the refresh interval in config.json
+
+## License
+
+This project is open source and available under the [MIT License](LICENSE).
+
+## Acknowledgments
+
+- Built with [tkinter](https://docs.python.org/3/library/tkinter.html)
+- Uses the [OpenRouter API](https://openrouter.ai/)
+- Inspired by macOS Dynamic Island feature
 - by Claude Sonnet 4.6 & Gemini3.5 Flash
-一个运行在 Windows 桌面上的 OpenRouter 用量监控悬浮窗。
+A Windows desktop floating window for monitoring OpenRouter usage.
 
 ![Python](https://img.shields.io/badge/Python-3.9%2B-blue)
 ![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
-## 功能
+## Features
 
-- **灵动岛模式**：平时收缩为顶部胶囊，点击展开完整看板
-- **实时用量**：显示当日 / 本月 Token 用量与消费金额
-- **配额进度条**：直观显示本月已用配额百分比
-- **每日弹窗**：点击日期卡片，查看最近 30 天每日用量 + 迷你柱状图
-- **多 Key 支持**：在设置中添加多个 API Key，汇总展示总用量
-- **CNY 模式**：支持按人民币汇率显示费用
-- **贴边吸附**：拖动窗口靠近屏幕边缘自动吸附
-- **透明度 / 置顶**：右键菜单可调节透明度与是否置顶
-- **Windows 11 原生圆角与阴影**
+- **Dynamic Island Mode**: Normally collapsed as top capsule, click to expand full dashboard
+- **Real-time Usage**: Shows daily/monthly token usage and spend
+- **Quota Progress Bar**: Visual display of monthly quota usage percentage
+- **Daily Popup**: Click date card to view last 30 days daily usage + mini bar chart
+- **Multi-Key Support**: Add multiple API Keys in settings, aggregate total usage
+- **CNY Mode**: Support displaying costs in CNY at configurable exchange rate
+- **Edge Snap**: Drag window near screen edge to auto-snap
+- **Transparency / Always on Top**: Right-click menu to adjust transparency and pin
+- **Windows 11 Native Rounded Corners and Shadows**
 
-## 截图
+## Screenshots
 
-**胶囊状态（灵动岛）**
+| **Dashboard**  | **Settings** |
+|---------|---------|
+Expanded <br> ![expanded](screenshots/expanded.png) <br> Capsule <br> ![island](screenshots/island.png) <br> Monthly Details Popup <br> ![monthly_details](screenshots/monthly_details.png)  | ![settings](screenshots/settings.png) 
 
-![island](screenshots/island.png)
 
-**展开状态（完整看板）**
 
-![expanded](screenshots/expanded.png)
 
-## 快速开始
 
-### 方式一：直接运行 Python
+
+
+
+
+
+
+
+
+## Quick Start
+
+### Method 1: Run Python Directly
 
 ```bash
-# 安装依赖
+# Install dependencies
 pip install requests
 
-# 运行
+# Run
 python main.py
 ```
 
-### 方式二：使用打包好的 exe
+### Method 2: Use Packaged exe
 
-直接运行 `OpenRouter-Dashboard.exe`（无需安装 Python）。
+Run `OpenRouter-Dashboard.exe` directly (no Python installation needed).
 
-## 配置
+## Configuration
 
-首次运行后，在右键菜单选择 **Settings** 填入 API Key，或直接编辑 `config.json`：
+After first run, select **Settings** from right-click menu to enter API Key, or edit `config.json` directly:
 
 ```json
 {
-  "api_key": "sk-or-v1-你的key",
+  "api_key": "sk-or-v1-yourkey",
   "refresh_sec": 60,
   "alpha": 0.93,
   "pinned": true,
+  "timezone": "",
   "cny_mode": false,
   "cny_rate": 7.0,
   "extra_keys": [],
@@ -61,27 +186,28 @@ python main.py
 }
 ```
 
-| 字段 | 说明 |
-|------|------|
-| `api_key` | OpenRouter API Key（必填） |
-| `refresh_sec` | 自动刷新间隔（秒），默认 60 |
-| `alpha` | 窗口透明度，0.1 ~ 1.0 |
-| `pinned` | 是否置顶 |
-| `cny_mode` | 是否以人民币显示费用 |
-| `cny_rate` | 美元兑人民币汇率 |
-| `extra_keys` | 额外 API Key 列表（用于多账号汇总） |
-| `mgmt_key` | Management API Key（查询配额） |
+| Field | Description |
+|------|-------------|
+| `api_key` | OpenRouter API Key (required) |
+| `refresh_sec` | Auto-refresh interval (seconds), default 60 |
+| `alpha` | Window transparency, 0.1 ~ 1.0 |
+| `pinned` | Whether to stay on top |
+| `timezone` | Display timezone: IANA name (e.g. `Asia/Shanghai`, `Europe/Berlin`), numeric offset in hours (e.g. `8`, `-3.5`), or empty for system local (default). On Python 3.9/3.10 on Windows, install `tzdata` for IANA name support; numeric offsets always work. |
+| `cny_mode` | Whether to display costs in CNY |
+| `cny_rate` | USD to CNY exchange rate |
+| `extra_keys` | Additional API Key list (for multi-account aggregation) |
+| `mgmt_key` | Management API Key (for quota queries) |
 
-## 操作说明
+## Usage
 
-| 操作 | 效果 |
-|------|------|
-| 单击窗口 | 切换胶囊 / 展开状态 |
-| 拖动窗口 | 移动位置，松开自动贴边 |
-| 右键菜单 | 设置 / 刷新 / 透明度 / 置顶 / 退出 |
-| 点击日期卡片 | 弹出每日用量详情 |
+| Action | Effect |
+|------|--------|
+| Click window | Toggle capsule / expanded state |
+| Drag window | Move position, auto-snap on release |
+| Right-click menu | Settings / Refresh / Transparency / Pin / Exit |
+| Click date card | Popup daily usage details |
 
-## 打包为 exe
+## Package as exe
 
 ```bash
 pip install pyinstaller

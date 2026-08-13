@@ -1,14 +1,16 @@
 {
-  "api_key": "sk-or-v1-你的key",
+  "api_key": "sk-or-v1-yourkey",
   "refresh_sec": 60,
   "x": null,
   "y": null,
   "alpha": 0.93,
   "extra_keys": [],
   "pinned": true,
+  "timezone": "",
   "col_expanded": false,
-  "cny_mode": false,
-  "cny_rate": 7.0,
+  "currency": "USD",
+  "currency_rate": 1.0,
   "mgmt_key": "",
-  "island_state": "island"
+  "island_state": "island",
+  "encrypt_keys": true
 }
