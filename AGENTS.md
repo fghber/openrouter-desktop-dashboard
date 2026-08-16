@@ -18,6 +18,7 @@ This is a small Windows desktop dashboard built with `tkinter` for monitoring Op
 
 ## Runtime and development
 - Run locally with `python main.py` after installing dependencies from `requirements.txt`.
+- Optional Windows no-console launcher: `run.vbs` (does not auto-install deps; Python must be on PATH).
 - The app requires Python 3.9+ and targets Windows.
 - Packaging is done with PyInstaller, e.g.:
   ```bash
@@ -28,7 +29,7 @@ This is a small Windows desktop dashboard built with `tkinter` for monitoring Op
 ## Important app behavior
 - Important: The `config.json` contains user API keys and should not be read or output in any way.
 - The app stores config in `config.json` next to the script or executable.
-- Config fields include: `api_key`, `refresh_sec`, `x`, `y`, `alpha`, `timezone`, `extra_keys`, `pinned`, `cny_mode`, `cny_rate`, `mgmt_key`, and `island_state`.
+- Config fields include: `api_key`, `refresh_sec`, `x`, `y`, `alpha`, `timezone`, `extra_keys`, `pinned`, `currency`, `currency_rate`, `last_currency`, `mgmt_key`, `island_state`, and `encrypt_keys`.
 - API endpoints used:
   - `https://openrouter.ai/api/v1/auth/key`
   - `https://openrouter.ai/api/v1/credits`
@@ -40,7 +41,7 @@ This is a small Windows desktop dashboard built with `tkinter` for monitoring Op
 - Two main states: `island` (collapsed capsule) and `expanded` (full dashboard).
 - Right-click menu offers pin, settings, refresh, and exit.
 - Window drag supports edge snapping and position persistence.
-- Currency toggle supports USD/CNY display.
+- Currency toggle supports USD ↔ last selected non-USD currency.
 
 ## Notes for change proposals
 - If adding features, keep the visible dashboard minimal and preserve the compact capsule style.

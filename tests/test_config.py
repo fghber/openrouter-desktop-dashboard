@@ -90,6 +90,9 @@ class TestLoadConfig:
 
     def test_resaves_plaintext_keys_when_encryption_enabled(self, tmp_config_dir):
         """Should re-save config to encrypt plaintext keys when encrypt_keys is True."""
+        pytest.importorskip("cryptography")
+        if main._get_fernet() is None:
+            pytest.skip("cryptography/Fernet unavailable")
         config = {
             "api_key": "sk-or-v1-plaintext-key",
             "refresh_sec": 60,
@@ -155,9 +158,97 @@ class TestLoadConfig:
         assert result["api_key"] == ""
         assert result["refresh_sec"] == 60
 
+    def test_migrates_cny_mode_to_currency(self, tmp_config_dir):
+        """Legacy cny_mode=true should migrate to currency=CNY with cny_rate."""
+        config = {
+            "api_key": "",
+            "refresh_sec": 60,
+            "alpha": 0.93,
+            "timezone": "",
+            "cny_mode": True,
+            "cny_rate": 7.2,
+            "encrypt_keys": False,
+            "extra_keys": [],
+            "mgmt_key": "",
+            "pinned": True,
+            "island_state": "island",
+        }
+        with open(tmp_config_dir, "w", encoding="utf-8") as f:
+            json.dump(config, f)
+
+        result = main.load_config()
+        assert result["currency"] == "CNY"
+        assert result["currency_rate"] == 7.2
+        assert "cny_mode" not in result
+        assert "cny_rate" not in result
+
+        with open(tmp_config_dir, "r", encoding="utf-8") as f:
+            saved = json.load(f)
+        assert saved["currency"] == "CNY"
+        assert saved["currency_rate"] == 7.2
+        assert "cny_mode" not in saved
+
+    def test_does_not_overwrite_explicit_currency_on_cny_migration(self, tmp_config_dir):
+        """If currency is already set to a non-USD value, keep it."""
+        config = {
+            "api_key": "",
+            "refresh_sec": 60,
+            "alpha": 0.93,
+            "timezone": "",
+            "cny_mode": True,
+            "cny_rate": 7.2,
+            "currency": "EUR",
+            "currency_rate": 0.92,
+            "encrypt_keys": False,
+            "extra_keys": [],
+            "mgmt_key": "",
+            "pinned": True,
+            "island_state": "island",
+        }
+        with open(tmp_config_dir, "w", encoding="utf-8") as f:
+            json.dump(config, f)
+
+        result = main.load_config()
+        assert result["currency"] == "EUR"
+        assert result["currency_rate"] == 0.92
+
+    def test_leftover_cny_rate_without_cny_mode_does_not_pollute_usd(self, tmp_config_dir):
+        """Stray cny_rate with cny_mode false must not overwrite currency_rate."""
+        config = {
+            "api_key": "",
+            "refresh_sec": 60,
+            "alpha": 0.93,
+            "timezone": "",
+            "cny_mode": False,
+            "cny_rate": 7.2,
+            "currency": "USD",
+            "currency_rate": 1.0,
+            "encrypt_keys": False,
+            "extra_keys": [],
+            "mgmt_key": "",
+            "pinned": True,
+            "island_state": "island",
+        }
+        with open(tmp_config_dir, "w", encoding="utf-8") as f:
+            json.dump(config, f)
+
+        result = main.load_config()
+        assert result["currency"] == "USD"
+        assert result["currency_rate"] == 1.0
+        assert "cny_rate" not in result
+        assert "cny_mode" not in result
+
 
 class TestSaveConfig:
     """Tests for save_config."""
+
+    @pytest.fixture(autouse=True)
+    def _require_cryptography_for_encrypt_tests(self, request):
+        # Only require cryptography for tests that assert ciphertext
+        if request.node.name.startswith("test_encrypts_") or request.node.name == "test_round_trip_save_load":
+            pytest.importorskip("cryptography")
+            if main._get_fernet() is None:
+                pytest.skip("cryptography/Fernet unavailable")
 
     def test_encrypts_api_key_on_save(self, tmp_config_dir):
         """Should encrypt api_key when saving with encrypt_keys=True."""

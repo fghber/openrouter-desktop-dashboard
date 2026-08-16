@@ -282,8 +282,8 @@ class TestUpdateUiSuccess:
 
         d._vals["daily"].config.assert_called_with(text="$0.00", fg=main.GRAY)
 
-    def test_monthly_from_breakdown(self, tmp_config_dir):
-        """Should calculate monthly from daily_breakdown when available."""
+    def test_monthly_from_all_monthly_even_with_breakdown(self, tmp_config_dir):
+        """Monthly card always uses all_monthly (activity breakdown is delayed)."""
         d = self._make_dashboard(tmp_config_dir)
         data = {
             "ok": True,
@@ -303,8 +303,29 @@ class TestUpdateUiSuccess:
         }
         d._update_ui(data)
 
-        # Monthly = 10 + 5 = 15
-        d._vals["monthly"].config.assert_called_with(text="$15.00", fg=main.WHITE)
+        # Monthly = all_monthly, not sum of delayed activity breakdown
+        d._vals["monthly"].config.assert_called_with(text="$50.00", fg=main.WHITE)
+
+    def test_total_dash_when_credits_failed(self, tmp_config_dir):
+        """Total spend should show —— when credits API failed (global_total_usage is None)."""
+        d = self._make_dashboard(tmp_config_dir)
+        data = {
+            "ok": True,
+            "limit": 1000,
+            "limit_rem": 800,
+            "balance": None,
+            "label": "Test Key",
+            "top3": [],
+            "top3_latest_date": "",
+            "daily_breakdown": {},
+            "all_daily": 5.0,
+            "all_monthly": 50.0,
+            "global_total_usage": None,
+        }
+        d._update_ui(data)
+
+        d._vals["total"].config.assert_called_with(text="——", fg=main.GRAY)
+        d._vals["balance"].config.assert_called_with(text="——", fg=main.GRAY)
 
     def test_monthly_from_all_monthly(self, tmp_config_dir):
         """Should use all_monthly when no daily_breakdown."""
@@ -498,12 +519,12 @@ class TestUpdateUiSuccess:
 
         # Title should include the date
         d._top3_title.config.assert_called_with(
-            text="Monthly Model TOP 3  As of 2026-08-15"
+            text="Monthly TOP 3 (2026-08-15)"
         )
 
         # First top3 entry
         name_lbl, cost_lbl = d._top3_lbls[0]
-        name_lbl.config.assert_called_with(text="claude-3-5-sonnet", fg=main.WHITE)
+        name_lbl.config.assert_called_with(text="3-5-sonnet", fg=main.WHITE)
         cost_lbl.config.assert_called_with(text="$50.00", fg=main.CYAN)
 
     def test_top3_without_mgmt_key(self, tmp_config_dir):

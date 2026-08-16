@@ -341,15 +341,45 @@ def enable_window_effects(hwnd):
 def load_config():
     d = {'api_key': '', 'refresh_sec': 60, 'x': None, 'y': None, 'alpha': 0.93,
          'timezone': '', 'currency': 'USD', 'currency_rate': 1.0, 'encrypt_keys': True}
+    raw = {}
     if os.path.exists(CONFIG_PATH):
         try:
             with open(CONFIG_PATH, encoding='utf-8') as f:
-                d.update(json.load(f))
+                raw = json.load(f)
+                d.update(raw)
         except Exception:
             pass
+    # Migrate old cny_mode/cny_rate → currency/currency_rate.
+    # Defaults always set currency='USD' and currency_rate=1.0 before merge, so
+    # detect legacy files by the presence of cny_* keys in the raw file.
+    # Only apply cny_rate when the user was actually in CNY mode (or currency is CNY)
+    # — never copy a leftover cny_rate onto a USD/EUR config.
+    needs_resave = False
+    if raw.get('cny_mode') or 'cny_rate' in raw:
+        migrating_to_cny = False
+        if raw.get('cny_mode') and (
+            'currency' not in raw or raw.get('currency') in (None, '', 'USD')
+        ):
+            d['currency'] = 'CNY'
+            migrating_to_cny = True
+            needs_resave = True
+        if 'cny_rate' in raw and (migrating_to_cny or d.get('currency') == 'CNY'):
+            if 'currency_rate' not in raw or float(raw.get('currency_rate') or 1.0) == 1.0:
+                try:
+                    d['currency_rate'] = float(raw['cny_rate'])
+                    needs_resave = True
+                except (TypeError, ValueError):
+                    pass
+        if 'cny_mode' in d or 'cny_rate' in d:
+            d.pop('cny_mode', None)
+            d.pop('cny_rate', None)
+            needs_resave = True
+    if not d.get('currency'):
+        d['currency'] = 'USD'
+    if not d.get('currency_rate'):
+        d['currency_rate'] = 1.0
     # Decrypt sensitive fields if encryption is enabled
     encrypt = d.get('encrypt_keys', True)
-    needs_resave = False
     for field in ENCRYPTED_FIELDS:
         if field in d:
             if field == 'extra_keys':
@@ -367,8 +397,8 @@ def load_config():
                 if encrypt and d[field] == dec and d[field]:
                     needs_resave = True
                 d[field] = dec
-    # Re-save config to encrypt any plaintext keys
-    if needs_resave and encrypt:
+    # Re-save to encrypt plaintext keys and/or persist cny_* migration
+    if needs_resave:
         save_config(d)
     return d
 
@@ -453,14 +483,15 @@ class Dashboard:
         # Dynamic Island state variable
         # 'island' = Dynamic Island capsule state, 'expanded' = expanded dashboard state
         self._island_state = self.cfg.get('island_state', 'expanded')
-        # Migrate old cny_mode/cny_rate to new currency/currency_rate
-        if self.cfg.get('cny_mode', False) and not self.cfg.get('currency'):
-            self.cfg['currency'] = 'CNY'
         if not self.cfg.get('currency'):
             self.cfg['currency'] = 'USD'
         if not self.cfg.get('currency_rate'):
-            self.cfg['currency_rate'] = self.cfg.get('cny_rate', 7.0)
-        
+            self.cfg['currency_rate'] = 1.0
+        # Last non-USD currency for title-bar USD ↔ alt toggle (only if already chosen)
+        cur = self.cfg.get('currency', 'USD')
+        if cur != 'USD' and cur in CURRENCIES:
+            self.cfg.setdefault('last_currency', cur)
+
         # Size definitions
         self._W_island = 270
         self._H_island = 32  # Reduced from 36 for a more compact capsule
@@ -469,6 +500,8 @@ class Dashboard:
 
         # Animation state
         self._animating = False
+        self._refresh_id = 0
+        self._drag_press = None  # (x_root, y_root) for click-vs-drag on island
 
         # Initial size
         W = self._W_expanded if self._island_state == 'expanded' else self._W_island
@@ -508,6 +541,7 @@ class Dashboard:
         # Record mouse click offset relative to window top-left (record once, unchanged throughout)
         self._off_x = e.x_root - self.root.winfo_x()
         self._off_y = e.y_root - self.root.winfo_y()
+        self._drag_press = (e.x_root, e.y_root)
         # Cache virtual screen and window dimensions for boundary clamping
         self._v_left, self._v_top, self._sw, self._sh = self._get_virtual_screen()
         self._ww = self.root.winfo_width()
@@ -521,7 +555,19 @@ class Dashboard:
         new_x = max(self._v_left - self._ww + 40, min(self._v_left + self._sw - 40, new_x))
         new_y = max(self._v_top, min(self._v_top + self._sh - self._wh, new_y))
         self.root.geometry(f'+{new_x}+{new_y}')
+
     def _drag_end(self, e):
+        # Island: small movement = click (toggle), larger = drag (snap/save)
+        if self._island_state == 'island' and self._drag_press is not None:
+            dx = abs(e.x_root - self._drag_press[0])
+            dy = abs(e.y_root - self._drag_press[1])
+            self._drag_press = None
+            if dx < 5 and dy < 5:
+                self._toggle_island_state()
+                return
+        else:
+            self._drag_press = None
+
         # Auto edge-snap logic
         W  = self.root.winfo_width()
         H  = self.root.winfo_height()
@@ -595,10 +641,9 @@ class Dashboard:
         self._island_arrow = tk.Label(island_capsule, text='›', bg=BG2, fg=GRAY, font=('Segoe UI', 11, 'bold'))
         self._island_arrow.pack(side='right', padx=(2, 12))
 
-        # Bind Dynamic Island interaction events
+        # Bind Dynamic Island interaction events (drag via root; click-vs-drag in _drag_end)
         for widget in [self._island_frame, island_capsule, self._island_logo, island_vals_frame, 
                        self._island_bal_lbl, self._island_sep, self._island_daily_lbl, self._island_arrow]:
-            widget.bind('<Button-1>', lambda _: self._toggle_island_state())
             widget.bind('<Enter>', lambda _: self._on_island_hover(True, island_capsule))
             widget.bind('<Leave>', lambda _: self._on_island_hover(False, island_capsule))
 
@@ -623,13 +668,16 @@ class Dashboard:
         self._status.pack(side='left')
 
         # Currency toggle — left side so it's always visible when collapsed
-        self._cny_btn = tk.Label(bar, text='$', bg=BG2, fg=GRAY,
+        self._currency_btn = tk.Label(bar, text='$', bg=BG2, fg=GRAY,
                                   font=('Segoe UI', 8, 'bold'), cursor='hand2', padx=4)
-        self._cny_btn.pack(side='left', padx=(4, 0))
-        self._cny_btn.bind('<Button-1>', lambda _: self._toggle_currency())
-        self._cny_btn.bind('<Enter>',    lambda _: self._cny_btn.config(fg=WHITE))
-        self._cny_btn.bind('<Leave>',    lambda _: self._cny_btn.config(
-                                             fg=YELLOW if self.cfg.get('currency', 'USD') != 'USD' else GRAY))
+        self._currency_btn.pack(side='left', padx=(4, 0))
+        self._currency_btn.bind('<Button-1>', lambda _: (self._toggle_currency(), 'break')[1])
+        self._currency_btn.bind('<Enter>',    lambda _: self._currency_btn.config(fg=WHITE))
+        self._currency_btn.bind('<Leave>',    lambda _: self._currency_btn.config(
+                                             fg=YELLOW if (
+                                                 self.cfg.get('currency', 'USD') in CURRENCIES
+                                                 and self.cfg.get('currency', 'USD') != 'USD'
+                                             ) else GRAY))
         self._update_currency_ui()
 
         self._col2_cells = []
@@ -638,7 +686,7 @@ class Dashboard:
         close_btn = tk.Label(bar, text='✕', bg=BG2, fg=WHITE,
                              font=('Segoe UI', 9), cursor='hand2', padx=5)
         close_btn.pack(side='right', padx=(0, 2))
-        close_btn.bind('<Button-1>', lambda _: self._quit())
+        close_btn.bind('<Button-1>', lambda _: (self._quit(), 'break')[1])
         close_btn.bind('<Enter>',    lambda _: close_btn.config(fg=RED))
         close_btn.bind('<Leave>',    lambda _: close_btn.config(fg=WHITE))
 
@@ -646,7 +694,7 @@ class Dashboard:
         self._shrink_btn = tk.Label(bar, text='▲', bg=BG2, fg=GRAY,
                                   font=('Segoe UI', 8), cursor='hand2', padx=4)
         self._shrink_btn.pack(side='right', padx=(0, 0))
-        self._shrink_btn.bind('<Button-1>', lambda _: self._toggle_island_state())
+        self._shrink_btn.bind('<Button-1>', lambda _: (self._toggle_island_state(), 'break')[1])
         self._shrink_btn.bind('<Enter>',    lambda _: self._shrink_btn.config(fg=WHITE))
         self._shrink_btn.bind('<Leave>',    lambda _: self._shrink_btn.config(fg=GRAY))
 
@@ -655,7 +703,7 @@ class Dashboard:
                                   fg=WHITE if self._pinned else GRAY,
                                   font=('Segoe UI', 8), cursor='hand2', padx=4)
         self._pin_lbl.pack(side='right', padx=(0, 0))
-        self._pin_lbl.bind('<Button-1>', lambda _: self._toggle_pin())
+        self._pin_lbl.bind('<Button-1>', lambda _: (self._toggle_pin(), 'break')[1])
         self._pin_lbl.bind('<Enter>',    lambda _: self._pin_lbl.config(fg=WHITE))
         self._pin_lbl.bind('<Leave>',    lambda _: self._pin_lbl.config(
                                              fg=WHITE if self._pinned else GRAY))
@@ -665,7 +713,7 @@ class Dashboard:
             lb = tk.Label(bar, text=txt, bg=BG2, fg=WHITE,
                           font=('Segoe UI', fs), cursor='hand2', padx=4)
             lb.pack(side='right')
-            lb.bind('<Button-1>', lambda _, c=cmd: c())
+            lb.bind('<Button-1>', lambda _, c=cmd: (c(), 'break')[1])
             lb.bind('<Enter>',    lambda _, l=lb, c=hv: l.config(fg=c))
             lb.bind('<Leave>',    lambda _, l=lb: l.config(fg=WHITE))
 
@@ -775,24 +823,31 @@ class Dashboard:
     # ── Currency ─────────────────────────────────────────────────────────────
 
     def _toggle_currency(self):
-        """Cycle through all supported currencies."""
-        currency_list = list(CURRENCIES.keys())
+        """Toggle USD ↔ last non-USD currency from Settings (keeps currency_rate)."""
         current = self.cfg.get('currency', 'USD')
-        idx = currency_list.index(current) if current in currency_list else 0
-        next_currency = currency_list[(idx + 1) % len(currency_list)]
-        self.cfg['currency'] = next_currency
+        if current == 'USD':
+            alt = self.cfg.get('last_currency')
+            if not alt or alt == 'USD' or alt not in CURRENCIES:
+                return  # no alternate chosen yet — stay on USD
+            self.cfg['currency'] = alt
+        else:
+            self.cfg['last_currency'] = current
+            self.cfg['currency'] = 'USD'
+        # Keep currency_rate unchanged; _fmt ignores it for USD
         save_config(self.cfg)
         self._update_currency_ui()
-        if hasattr(self, '_last_data'):
+        if getattr(self, '_last_data', None) is not None:
             self._update_ui(self._last_data)
 
     def _update_currency_ui(self):
         """Update the currency toggle button label and color."""
         currency = self.cfg.get('currency', 'USD')
         symbol = CURRENCIES.get(currency, ('$', 2, False))[0]
-        self._cny_btn.config(text=symbol)
-        # Highlight non-USD currencies
-        self._cny_btn.config(fg=YELLOW if currency != 'USD' else GRAY)
+        self._currency_btn.config(text=symbol)
+        # Highlight known non-USD currencies
+        self._currency_btn.config(
+            fg=YELLOW if currency in CURRENCIES and currency != 'USD' else GRAY
+        )
 
     def _fmt(self, usd):
         """Format a USD float according to current currency."""
@@ -807,39 +862,48 @@ class Dashboard:
         return f'{symbol}{converted:.2f}'
 
     def _fmt2(self, usd):
-        """Format with 2 decimal places (for balance / limit)."""
-        currency = self.cfg.get('currency', 'USD')
-        rate = float(self.cfg.get('currency_rate', 1.0))
-        symbol, decimals, _ = CURRENCIES.get(currency, ('$', 2, False))
-        if currency == 'USD':
-            return f'${usd:.2f}'
-        converted = usd * rate
-        if decimals == 0:
-            return f'{symbol}{converted:.0f}'
-        return f'{symbol}{converted:.2f}'
+        """Alias for _fmt (balance / limit display)."""
+        return self._fmt(usd)
 
-    def _fetch_rate(self, currency_var, rate_var):
-        """Fetch the latest exchange rate from a public API and update the entry."""
+    def _fetch_rate(self, currency_var, rate_var, dlg=None):
+        """Fetch the latest exchange rate off the UI thread and update the entry."""
         target = currency_var.get().strip()
         if not target or target == 'USD':
             rate_var.set('1.0')
             return
-        rate = fetch_exchange_rate(target)
-        if rate is not None:
-            rate_var.set(f'{rate:.4f}')
-        else:
-            rate_var.set('?')
+
+        def _work():
+            rate = fetch_exchange_rate(target)
+            def _apply():
+                try:
+                    if dlg is not None and not dlg.winfo_exists():
+                        return
+                except Exception:
+                    return
+                if rate is not None:
+                    rate_var.set(f'{rate:.4f}')
+                else:
+                    rate_var.set('?')
+            try:
+                self.root.after(0, _apply)
+            except Exception:
+                pass
+
+        threading.Thread(target=_work, daemon=True).start()
 
     def _toggle_encrypt(self, encrypt_var, lock_row):
         """Toggle encryption on/off for API keys."""
-        encrypt_var.set(not encrypt_var.get())
-        self.cfg['encrypt_keys'] = encrypt_var.get()
+        if _get_fernet() is None:
+            return
+        new_val = not encrypt_var.get()
+        encrypt_var.set(new_val)
+        self.cfg['encrypt_keys'] = new_val
         # Update lock icon color (first child)
         lock_icon = lock_row.winfo_children()[0]
-        lock_icon.config(fg=WHITE if encrypt_var.get() else GRAY)
+        lock_icon.config(fg=WHITE if new_val else GRAY)
         # Update lock button text (second child)
         lock_btn = lock_row.winfo_children()[1]
-        lock_btn.config(text='Store keys encrypted' if encrypt_var.get() else 'Store keys unencrypted')
+        lock_btn.config(text='Store keys encrypted' if new_val else 'Store keys unencrypted')
         # Re-save config with new encryption setting
         # This will re-encrypt or decrypt all sensitive fields
         save_config(self.cfg)
@@ -931,20 +995,27 @@ class Dashboard:
         ENT_FONT  = ('Consolas', 9)      # All entry fields
 
         # Encryption toggle (lock button)
-        encrypt_var = tk.BooleanVar(value=self.cfg.get('encrypt_keys', True))
+        fernet_ok = _get_fernet() is not None
+        encrypt_var = tk.BooleanVar(value=self.cfg.get('encrypt_keys', True) if fernet_ok else False)
         lock_row = tk.Frame(dlg, bg=BG2)
         lock_row.pack(fill='x', padx=14, pady=(4, 0))
-        lock_icon = tk.Label(lock_row, text='🔒', bg=BG2, fg=WHITE if encrypt_var.get() else GRAY,
-                             font=('Segoe UI', 10), cursor='hand2')
+        if fernet_ok:
+            lock_label = 'Store keys encrypted' if encrypt_var.get() else 'Store keys unencrypted'
+            lock_fg = WHITE if encrypt_var.get() else GRAY
+        else:
+            lock_label = 'Encryption unavailable (install cryptography)'
+            lock_fg = GRAY
+        lock_icon = tk.Label(lock_row, text='🔒', bg=BG2, fg=lock_fg,
+                             font=('Segoe UI', 10), cursor='hand2' if fernet_ok else 'arrow')
         lock_icon.pack(side='left', padx=(0, 4))
-        lock_btn = tk.Label(lock_row, text='Store keys encrypted', bg=BG2, fg=GRAY,
-                            font=LBL_FONT, cursor='hand2')
+        lock_btn = tk.Label(lock_row, text=lock_label, bg=BG2, fg=GRAY,
+                            font=LBL_FONT, cursor='hand2' if fernet_ok else 'arrow')
         lock_btn.pack(side='left')
-        lock_btn.bind('<Button-1>', lambda _: self._toggle_encrypt(encrypt_var, lock_row))
-        lock_icon.bind('<Button-1>', lambda _: self._toggle_encrypt(encrypt_var, lock_row))
-        # Tooltip
-        lock_btn.bind('<Enter>', lambda _: lock_btn.config(fg=WHITE))
-        lock_btn.bind('<Leave>', lambda _: lock_btn.config(fg=GRAY))
+        if fernet_ok:
+            lock_btn.bind('<Button-1>', lambda _: self._toggle_encrypt(encrypt_var, lock_row))
+            lock_icon.bind('<Button-1>', lambda _: self._toggle_encrypt(encrypt_var, lock_row))
+            lock_btn.bind('<Enter>', lambda _: lock_btn.config(fg=WHITE))
+            lock_btn.bind('<Leave>', lambda _: lock_btn.config(fg=GRAY))
 
         def _entry(parent, var, show='*'):
             """Uniform style single-line entry with show/hide Key checkbox row"""
@@ -1058,7 +1129,7 @@ class Dashboard:
         fetch_btn = tk.Label(rate_row, text='↻ Fetch', bg=BG2, fg=CYAN,
                              font=LBL_FONT, cursor='hand2', padx=6)
         fetch_btn.pack(side='right', padx=(4, 0))
-        fetch_btn.bind('<Button-1>', lambda _: self._fetch_rate(currency_var, rate_var))
+        fetch_btn.bind('<Button-1>', lambda _: self._fetch_rate(currency_var, rate_var, dlg))
         fetch_btn.bind('<Enter>',    lambda _: fetch_btn.config(fg=WHITE))
         fetch_btn.bind('<Leave>',    lambda _: fetch_btn.config(fg=CYAN))
 
@@ -1077,7 +1148,10 @@ class Dashboard:
             self.cfg['extra_keys'] = [v.get().strip() for v in extra_vars if v.get().strip()]
             try: self.cfg['refresh_sec'] = max(10, int(rv.get().strip()))
             except ValueError: pass
-            self.cfg['currency'] = currency_var.get().strip()
+            cur = currency_var.get().strip() or 'USD'
+            self.cfg['currency'] = cur
+            if cur != 'USD':
+                self.cfg['last_currency'] = cur
             try:
                 rate = float(rate_var.get().strip())
                 if rate > 0:
@@ -1276,7 +1350,7 @@ class Dashboard:
 
         # 1. credits API: balance + historical total spend (account level, any key returns same result)
         balance = None
-        global_total_usage = 0.0
+        global_total_usage = None  # None = credits fetch failed (distinct from real $0)
         for attempt in range(3):
             try:
                 rc = requests.get('https://openrouter.ai/api/v1/credits',
@@ -1292,12 +1366,12 @@ class Dashboard:
                 if attempt < 2:
                     time.sleep(2)
 
-        # 2. Daily spend: query usage_daily for all configured keys and sum
+        # 2. Daily/monthly spend: seed from first auth/key, then sum extra keys only
         # usage_daily reset by OpenRouter officially at UTC 0:00 real-time, no delay, most accurate
-        all_keys = [key] + [k for k in self.cfg.get('extra_keys', []) if k]
-        all_daily  = 0.0
-        all_monthly = 0.0
-        for k in all_keys:
+        all_daily   = float(d.get('usage_daily',   0) or 0)
+        all_monthly = float(d.get('usage_monthly', 0) or 0)
+        extra_keys = [k for k in self.cfg.get('extra_keys', []) if k and k != key]
+        for k in extra_keys:
             for attempt in range(2):
                 try:
                     rk = requests.get('https://openrouter.ai/api/v1/auth/key',
@@ -1316,7 +1390,7 @@ class Dashboard:
         top3 = []
         top3_latest = ''
         daily_breakdown = {}
-        # activity API has audit delay (today's spend often appears tomorrow), only used for monthly details and TOP3, not for daily spend
+        # activity API has audit delay (today's spend often appears tomorrow), only used for monthly details and TOP3, not for daily/monthly spend cards
         mgmt_key = self.cfg.get('mgmt_key', '').strip()
         if mgmt_key:
             now_utc = datetime.now(tz=timezone.utc)
@@ -1334,10 +1408,6 @@ class Dashboard:
                         daily_breakdown: dict = {}
                         latest_date = ''
                         all_data = rg.json().get('data', [])
-                        print(f"[activity] API returned {len(all_data)} items, month_prefix={month_prefix}", file=sys.stderr)
-                        if all_data:
-                            print(f"[activity] First item keys: {list(all_data[0].keys())}", file=sys.stderr)
-                            print(f"[activity] First item: {all_data[0]}", file=sys.stderr)
                         for g in all_data:
                             gdate = g.get('date', '')
                             if not gdate.startswith(month_prefix):
@@ -1355,11 +1425,8 @@ class Dashboard:
                                 daily_breakdown[day] = {'cost': 0.0, 'tokens': 0}
                             daily_breakdown[day]['cost']   += cost
                             daily_breakdown[day]['tokens'] += tok_in + tok_out
-                        print(f"[activity] daily_breakdown has {len(daily_breakdown)} days, model_cost has {len(model_cost)} models", file=sys.stderr)
                         top3 = sorted(model_cost.items(), key=lambda x: x[1], reverse=True)[:3]
                         top3_latest = latest_date
-                    else:
-                        print(f"[activity] API returned status {rg.status_code}: {rg.text[:200]}", file=sys.stderr)
                     break
                 except Exception:
                     if attempt < 2:
@@ -1376,7 +1443,7 @@ class Dashboard:
             'daily_breakdown':        daily_breakdown,
             'all_daily':              all_daily,             # Sum of usage_daily for all keys, real-time daily spend
             'all_monthly':            all_monthly,           # Sum of usage_monthly for all keys
-            'global_total_usage':     global_total_usage,    # Account historical total spend from credits API
+            'global_total_usage':     global_total_usage,    # Account historical total spend from credits API (None if credits failed)
         }
 
     # ── UI update ─────────────────────────────────────────────────────────────
@@ -1419,11 +1486,8 @@ class Dashboard:
         # Daily spend: sum of usage_daily for all keys (OpenRouter official real-time, UTC 0 reset)
         daily = data.get('all_daily', 0.0)
 
-        # Monthly spend: use full account breakdown if activity data available, otherwise sum of usage_monthly for all keys
-        if self._daily_breakdown:
-            monthly = sum(v['cost'] for v in self._daily_breakdown.values())
-        else:
-            monthly = data.get('all_monthly', 0.0)
+        # Monthly spend: always use real-time usage_monthly sum (activity has audit delay)
+        monthly = data.get('all_monthly', 0.0)
 
         # daily — always red
         self._vals['daily'].config(
@@ -1462,11 +1526,14 @@ class Dashboard:
             self._monthly_pct.config(text='No Quota Limit', fg=GRAY)
             self._monthly_bar.place(relwidth=0)
 
-        # Total spend: use credits API's total_usage (this key's historical total spend)
-        total = data.get('global_total_usage') or data.get('usage', 0)
-        self._vals['total'].config(
-            text=self._fmt(total),
-            fg=RED if total > 20 else YELLOW if total > 5 else WHITE)
+        # Total spend: credits API total_usage; show —— if credits failed
+        total = data.get('global_total_usage')
+        if total is None:
+            self._vals['total'].config(text='——', fg=GRAY)
+        else:
+            self._vals['total'].config(
+                text=self._fmt(total),
+                fg=RED if total > 20 else YELLOW if total > 5 else WHITE)
 
         top3 = data.get('top3', [])
         latest_date = data.get('top3_latest_date', '')
@@ -1493,29 +1560,57 @@ class Dashboard:
 
     def _trigger_refresh(self):
         if hasattr(self, '_job'):
-            self.root.after_cancel(self._job)
-        self._dot.config(fg=YELLOW)
-        self._status.config(text='Refreshing...')
-        if hasattr(self, '_island_logo'):
-            self._island_logo.config(fg=YELLOW)
-        threading.Thread(target=self._worker, daemon=True).start()
+            try:
+                self.root.after_cancel(self._job)
+            except Exception:
+                pass
+            self._job = None
+        self._refresh_id = getattr(self, '_refresh_id', 0) + 1
+        rid = self._refresh_id
+        try:
+            self._dot.config(fg=YELLOW)
+            self._status.config(text='Refreshing...')
+            if hasattr(self, '_island_logo'):
+                self._island_logo.config(fg=YELLOW)
+        except tk.TclError:
+            return
+        threading.Thread(target=self._worker, args=(rid,), daemon=True).start()
 
-    def _worker(self):
+    def _worker(self, rid):
         data = self._fetch()
-        self.root.after(0, lambda: self._on_fetch_done(data))
+        try:
+            self.root.after(0, lambda: self._on_fetch_done(data, rid))
+        except tk.TclError:
+            pass
 
-    def _on_fetch_done(self, data):
-        self._update_ui(data)
-        ms = max(10, self.cfg.get('refresh_sec', 60)) * 1000
-        self._job = self.root.after(ms, self._trigger_refresh)
+    def _on_fetch_done(self, data, rid=None):
+        if rid is not None and rid != getattr(self, '_refresh_id', rid):
+            return  # Stale fetch; a newer refresh is in flight
+        try:
+            self._update_ui(data)
+            if hasattr(self, '_job') and self._job is not None:
+                try:
+                    self.root.after_cancel(self._job)
+                except Exception:
+                    pass
+            ms = max(10, self.cfg.get('refresh_sec', 60)) * 1000
+            self._job = self.root.after(ms, self._trigger_refresh)
+        except tk.TclError:
+            pass
 
     def _schedule_refresh(self):
         self._trigger_refresh()
 
     def _quit(self):
-        if hasattr(self, '_job'):
-            self.root.after_cancel(self._job)
-        self.root.destroy()
+        if hasattr(self, '_job') and self._job is not None:
+            try:
+                self.root.after_cancel(self._job)
+            except Exception:
+                pass
+        try:
+            self.root.destroy()
+        except tk.TclError:
+            pass
 
 
 if __name__ == '__main__':

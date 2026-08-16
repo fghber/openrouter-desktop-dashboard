@@ -200,11 +200,14 @@ class TestFetchSuccess:
         assert result["daily_breakdown"] == {}
 
     def test_fetch_with_extra_keys(self, tmp_config_dir, mock_requests):
-        """Should aggregate usage_daily and usage_monthly from extra keys."""
+        """Should aggregate usage_daily and usage_monthly from main + extra keys."""
         self._setup_config(tmp_config_dir, extra_keys=["sk-or-v1-extra1", "sk-or-v1-extra2"])
 
         auth_response = make_mock_response(json_data={
-            "data": {"limit": 1000, "limit_remaining": 800, "label": "Main"}
+            "data": {
+                "limit": 1000, "limit_remaining": 800, "label": "Main",
+                "usage_daily": 2.0, "usage_monthly": 20.0,
+            }
         })
         credits_response = make_mock_response(json_data={
             "data": {"total_credits": 100.0, "total_usage": 20.0}
@@ -226,8 +229,69 @@ class TestFetchSuccess:
 
         result = dashboard._fetch()
 
-        assert result["all_daily"] == 8.0  # 5 + 3
-        assert result["all_monthly"] == 80.0  # 50 + 30
+        assert result["all_daily"] == 10.0  # 2 + 5 + 3
+        assert result["all_monthly"] == 100.0  # 20 + 50 + 30
+        # auth + credits + 2 extras (main key not re-fetched)
+        assert mock_requests.call_count == 4
+
+    def test_fetch_does_not_double_count_duplicate_extra_key(self, tmp_config_dir, mock_requests):
+        """Extra key matching the main key should be skipped."""
+        self._setup_config(
+            tmp_config_dir,
+            api_key="sk-or-v1-test",
+            extra_keys=["sk-or-v1-test", "sk-or-v1-extra1"],
+        )
+
+        auth_response = make_mock_response(json_data={
+            "data": {
+                "limit": 1000, "limit_remaining": 800, "label": "Main",
+                "usage_daily": 4.0, "usage_monthly": 40.0,
+            }
+        })
+        credits_response = make_mock_response(json_data={
+            "data": {"total_credits": 100.0, "total_usage": 20.0}
+        })
+        extra1_response = make_mock_response(json_data={
+            "data": {"usage_daily": 1.0, "usage_monthly": 10.0}
+        })
+
+        mock_requests.side_effect = [
+            auth_response, credits_response, extra1_response
+        ]
+
+        dashboard = main.Dashboard.__new__(main.Dashboard)
+        dashboard.cfg = main.load_config()
+
+        result = dashboard._fetch()
+
+        assert result["all_daily"] == 5.0  # 4 + 1 (duplicate main skipped)
+        assert result["all_monthly"] == 50.0
+        assert mock_requests.call_count == 3
+
+    def test_fetch_seeds_usage_from_first_auth(self, tmp_config_dir, mock_requests):
+        """Should use usage_daily/monthly from the first auth/key response."""
+        self._setup_config(tmp_config_dir)
+
+        auth_response = make_mock_response(json_data={
+            "data": {
+                "limit": 1000, "limit_remaining": 800, "label": "Main",
+                "usage_daily": 7.5, "usage_monthly": 42.0,
+            }
+        })
+        credits_response = make_mock_response(json_data={
+            "data": {"total_credits": 100.0, "total_usage": 20.0}
+        })
+
+        mock_requests.side_effect = [auth_response, credits_response]
+
+        dashboard = main.Dashboard.__new__(main.Dashboard)
+        dashboard.cfg = main.load_config()
+
+        result = dashboard._fetch()
+
+        assert result["all_daily"] == 7.5
+        assert result["all_monthly"] == 42.0
+        assert mock_requests.call_count == 2
 
     def test_fetch_with_mgmt_key_activity(self, tmp_config_dir, mock_requests):
         """Should fetch top3 and daily_breakdown when mgmt_key is set."""
@@ -375,7 +439,7 @@ class TestFetchSuccess:
         result = dashboard._fetch()
 
         assert result["balance"] is None
-        assert result["global_total_usage"] == 0.0
+        assert result["global_total_usage"] is None
 
     def test_fetch_extra_key_failure_skips_key(self, tmp_config_dir, mock_requests):
         """Should skip extra keys that fail to fetch."""

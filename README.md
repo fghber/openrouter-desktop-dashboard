@@ -39,6 +39,8 @@ A Windows desktop dashboard built with `tkinter` for monitoring OpenRouter usage
 python main.py
 ```
 
+On Windows you can also double-click `run.vbs` for a no-console launch (requires Python on `PATH` and dependencies already installed via `pip install -r requirements.txt`).
+
 ### Configuration Options
 
 The `config.json` file supports the following fields:
@@ -46,15 +48,16 @@ The `config.json` file supports the following fields:
 | Field | Type | Description |
 |-------|------|-------------|
 | `api_key` | string | Primary OpenRouter API key (required) |
-| `refresh_sec` | number | Refresh interval in seconds (default: 30) |
+| `refresh_sec` | number | Refresh interval in seconds (default: 60) |
 | `x`, `y` | number | Window position (saved automatically) |
-| `alpha` | number | Window transparency (0.0-1.0, default: 0.9) |
-| `timezone` | string | IANA timezone for displaying times (default: "local") |
+| `alpha` | number | Window transparency (0.0-1.0, default: 0.93) |
+| `timezone` | string | IANA timezone for displaying times (empty = system local) |
 | `extra_keys` | array | Additional API keys to aggregate usage for |
-| `mgmt_key` | string | Optional management key for detailed model analytics |
+| `mgmt_key` | string | Optional management key for monthly model TOP 3 and daily breakdown |
 | `pinned` | boolean | Whether window stays on top (default: false) |
 | `currency` | string | Display currency code (default: "USD"). Supported: USD, CNY, EUR, GBP, JPY, CAD, AUD, CHF, INR, KRW, BRL, RUB, TRY, ZAR, SGD, HKD, TWD, MYR, THB, IDR |
 | `currency_rate` | number | Exchange rate from USD to selected currency (default: 1.0). Can be fetched automatically via the "↻ Fetch" button in Settings |
+| `last_currency` | string | Last non-USD currency chosen in Settings (used by the title-bar USD ↔ alternate toggle; set automatically) |
 | `island_state` | string | UI state: "island" (collapsed) or "expanded" (default: "island") |
 | `encrypt_keys` | boolean | Whether to encrypt API keys in config.json (default: true). Toggle in Settings with lock button |
 
@@ -67,7 +70,7 @@ The `config.json` file supports the following fields:
   - Refresh: Manually trigger data update
   - Exit: Close the application
 - **Double-click**: Toggle between island (collapsed) and expanded states
-- **Currency toggle**: Click the currency symbol in the title bar to cycle through supported currencies (USD → CNY → EUR → GBP → JPY → ...)
+- **Currency toggle**: Click the currency symbol in the title bar to switch between USD and the last non-USD currency selected in Settings
 
 ## Building the Executable
 
@@ -129,7 +132,7 @@ A Windows desktop floating window for monitoring OpenRouter usage.
 - **Quota Progress Bar**: Visual display of monthly quota usage percentage
 - **Daily Popup**: Click date card to view last 30 days daily usage + mini bar chart
 - **Multi-Key Support**: Add multiple API Keys in settings, aggregate total usage
-- **CNY Mode**: Support displaying costs in CNY at configurable exchange rate
+- **Multi-currency**: Display costs in any supported currency (USD, CNY, EUR, GBP, JPY, and more) at a configurable exchange rate
 - **Edge Snap**: Drag window near screen edge to auto-snap
 - **Transparency / Always on Top**: Right-click menu to adjust transparency and pin
 - **Windows 11 Native Rounded Corners and Shadows**
@@ -179,8 +182,8 @@ After first run, select **Settings** from right-click menu to enter API Key, or 
   "alpha": 0.93,
   "pinned": true,
   "timezone": "",
-  "cny_mode": false,
-  "cny_rate": 7.0,
+  "currency": "USD",
+  "currency_rate": 1.0,
   "extra_keys": [],
   "mgmt_key": ""
 }
@@ -193,10 +196,13 @@ After first run, select **Settings** from right-click menu to enter API Key, or 
 | `alpha` | Window transparency, 0.1 ~ 1.0 |
 | `pinned` | Whether to stay on top |
 | `timezone` | Display timezone: IANA name (e.g. `Asia/Shanghai`, `Europe/Berlin`), numeric offset in hours (e.g. `8`, `-3.5`), or empty for system local (default). On Python 3.9/3.10 on Windows, install `tzdata` for IANA name support; numeric offsets always work. |
-| `cny_mode` | Whether to display costs in CNY |
-| `cny_rate` | USD to CNY exchange rate |
+| `currency` | Display currency code (default: `"USD"`) |
+| `currency_rate` | Exchange rate from USD to the selected currency (default: `1.0`) |
+| `last_currency` | Last non-USD currency from Settings (used by the title-bar toggle; set automatically) |
 | `extra_keys` | Additional API Key list (for multi-account aggregation) |
-| `mgmt_key` | Management API Key (for quota queries) |
+| `mgmt_key` | Optional management key for monthly model TOP 3 and daily breakdown |
+
+Full field list (including `island_state`, `encrypt_keys`, etc.): see **Configuration Options** above.
 
 ## Usage
 
@@ -206,6 +212,7 @@ After first run, select **Settings** from right-click menu to enter API Key, or 
 | Drag window | Move position, auto-snap on release |
 | Right-click menu | Settings / Refresh / Transparency / Pin / Exit |
 | Click date card | Popup daily usage details |
+| Click currency symbol | Toggle USD ↔ last non-USD currency from Settings |
 
 ## Package as exe
 

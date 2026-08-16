@@ -58,8 +58,9 @@ class TestResolveTz:
     def test_iana_zone_utc(self):
         """UTC should resolve to a ZoneInfo object."""
         result = main.resolve_tz("UTC")
-        # ZoneInfo('UTC') should equal timezone.utc
-        assert result == timezone.utc
+        from zoneinfo import ZoneInfo
+        assert isinstance(result, ZoneInfo)
+        assert str(result) == "UTC"
 
     def test_iana_zone_asia_shanghai(self):
         """Asia/Shanghai should resolve to a ZoneInfo object."""
@@ -100,4 +101,6 @@ class TestResolveTz:
     def test_whitespace_around_iana(self):
         """Whitespace around IANA zone name should be stripped."""
         result = main.resolve_tz("  UTC  ")
-        assert result == timezone.utc
+        from zoneinfo import ZoneInfo
+        assert isinstance(result, ZoneInfo)
+        assert str(result) == "UTC"

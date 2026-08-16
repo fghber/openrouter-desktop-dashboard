@@ -50,22 +50,34 @@ class TestGetFernet:
 
     def test_returns_fernet_when_cryptography_available(self):
         """Should return a Fernet instance when cryptography is installed."""
+        pytest.importorskip("cryptography")
         result = main._get_fernet()
-        # cryptography is installed in the test environment
         from cryptography.fernet import Fernet
         assert isinstance(result, Fernet)
 
     def test_returns_none_when_cryptography_unavailable(self):
         """Should return None when cryptography import fails."""
-        with patch.dict("sys.modules", {"cryptography.fernet": None}):
-            with patch("cryptography.fernet", None, create=True):
-                result = main._get_fernet()
-                assert result is None
+        import builtins
+        real_import = builtins.__import__
+
+        def _fake_import(name, *args, **kwargs):
+            if name == "cryptography.fernet" or name.startswith("cryptography"):
+                raise ImportError("mocked missing cryptography")
+            return real_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=_fake_import):
+            result = main._get_fernet()
+            assert result is None
 
 
 class TestEncryptDecrypt:
     """Tests for _encrypt_value and _decrypt_value round-trip."""
 
+    @pytest.fixture(autouse=True)
+    def _require_cryptography(self):
+        pytest.importorskip("cryptography")
+        if main._get_fernet() is None:
+            pytest.skip("cryptography/Fernet unavailable")
     def test_encrypt_decrypt_round_trip(self):
         """Encrypting then decrypting should return the original value."""
         original = "sk-or-v1-test-key-12345"

@@ -2,7 +2,7 @@
 Tests for currency toggle and settings-related logic.
 
 Covers:
-- _toggle_currency: cycles through currencies correctly
+- _toggle_currency: USD ↔ last_currency (no-op when no valid alternate)
 - _update_currency_ui: updates button label and color
 - _toggle_encrypt: toggles encryption setting
 - _toggle_pin: toggles pinned state
@@ -39,34 +39,43 @@ class TestToggleCurrency:
 
         dashboard = main.Dashboard.__new__(main.Dashboard)
         dashboard.cfg = main.load_config()
-        dashboard._cny_btn = MagicMock()
-        dashboard._last_data = None
+        dashboard._currency_btn = MagicMock()
         dashboard._tz = main.resolve_tz("")
         return dashboard
 
-    def test_toggle_from_usd_to_next(self, tmp_config_dir):
-        """Should cycle from USD to the next currency in the list."""
+    def test_toggle_from_usd_to_last_currency(self, tmp_config_dir):
+        """Should toggle from USD to last_currency."""
         d = self._make_dashboard(tmp_config_dir, currency="USD")
+        d.cfg["last_currency"] = "CNY"
+        d.cfg["currency_rate"] = 7.2
         d._toggle_currency()
-        # USD is index 0, next should be CNY (index 1)
         assert d.cfg["currency"] == "CNY"
+        assert d.cfg["currency_rate"] == 7.2  # rate preserved
 
-    def test_toggle_from_cny_to_next(self, tmp_config_dir):
-        """Should cycle from CNY to EUR."""
+    def test_toggle_from_cny_to_usd(self, tmp_config_dir):
+        """Should toggle from CNY back to USD and remember last_currency."""
         d = self._make_dashboard(tmp_config_dir, currency="CNY")
-        d._toggle_currency()
-        assert d.cfg["currency"] == "EUR"
-
-    def test_toggle_wraps_around(self, tmp_config_dir):
-        """Should wrap around to USD from the last currency."""
-        last_currency = list(main.CURRENCIES.keys())[-1]
-        d = self._make_dashboard(tmp_config_dir, currency=last_currency)
+        d.cfg["currency_rate"] = 7.2
         d._toggle_currency()
         assert d.cfg["currency"] == "USD"
+        assert d.cfg["last_currency"] == "CNY"
+        assert d.cfg["currency_rate"] == 7.2
+
+    def test_toggle_usd_eur_roundtrip_preserves_rate(self, tmp_config_dir):
+        """USD ↔ EUR should keep the EUR exchange rate."""
+        d = self._make_dashboard(tmp_config_dir, currency="EUR")
+        d.cfg["currency_rate"] = 0.92
+        d.cfg["last_currency"] = "EUR"
+        d._toggle_currency()  # EUR → USD
+        assert d.cfg["currency"] == "USD"
+        d._toggle_currency()  # USD → EUR
+        assert d.cfg["currency"] == "EUR"
+        assert d.cfg["currency_rate"] == 0.92
 
     def test_toggle_updates_ui(self, tmp_config_dir):
         """Should call _update_currency_ui after toggling."""
         d = self._make_dashboard(tmp_config_dir, currency="USD")
+        d.cfg["last_currency"] = "EUR"
         with patch.object(d, "_update_currency_ui") as mock_update:
             d._toggle_currency()
             mock_update.assert_called_once()
@@ -74,18 +83,26 @@ class TestToggleCurrency:
     def test_toggle_saves_config(self, tmp_config_dir):
         """Should save config after toggling."""
         d = self._make_dashboard(tmp_config_dir, currency="USD")
+        d.cfg["last_currency"] = "CNY"
         d._toggle_currency()
         # Config file should be updated
         with open(tmp_config_dir, "r", encoding="utf-8") as f:
             saved = json.load(f)
         assert saved["currency"] == "CNY"
 
-    def test_toggle_with_unknown_currency(self, tmp_config_dir):
-        """Should start from USD if current currency is unknown."""
-        d = self._make_dashboard(tmp_config_dir, currency="XYZ")
+    def test_toggle_with_unknown_last_currency(self, tmp_config_dir):
+        """Should stay on USD if last_currency is missing or unknown."""
+        d = self._make_dashboard(tmp_config_dir, currency="USD")
+        d.cfg["last_currency"] = "XYZ"
         d._toggle_currency()
-        # Unknown currency → index 0 → next is CNY
-        assert d.cfg["currency"] == "CNY"
+        assert d.cfg["currency"] == "USD"
+
+    def test_toggle_with_no_last_currency(self, tmp_config_dir):
+        """Should stay on USD when no alternate currency has been chosen."""
+        d = self._make_dashboard(tmp_config_dir, currency="USD")
+        d.cfg.pop("last_currency", None)
+        d._toggle_currency()
+        assert d.cfg["currency"] == "USD"
 
 
 class TestUpdateCurrencyUi:
@@ -111,43 +128,43 @@ class TestUpdateCurrencyUi:
 
         dashboard = main.Dashboard.__new__(main.Dashboard)
         dashboard.cfg = main.load_config()
-        dashboard._cny_btn = MagicMock()
+        dashboard._currency_btn = MagicMock()
         return dashboard
 
     def test_usd_shows_dollar_gray(self, tmp_config_dir):
         """USD should show $ in GRAY."""
         d = self._make_dashboard(tmp_config_dir, currency="USD")
         d._update_currency_ui()
-        d._cny_btn.config.assert_any_call(text="$")
-        d._cny_btn.config.assert_any_call(fg=main.GRAY)
+        d._currency_btn.config.assert_any_call(text="$")
+        d._currency_btn.config.assert_any_call(fg=main.GRAY)
 
     def test_cny_shows_yuan_yellow(self, tmp_config_dir):
         """CNY should show ¥ in YELLOW."""
         d = self._make_dashboard(tmp_config_dir, currency="CNY")
         d._update_currency_ui()
-        d._cny_btn.config.assert_any_call(text="¥")
-        d._cny_btn.config.assert_any_call(fg=main.YELLOW)
+        d._currency_btn.config.assert_any_call(text="¥")
+        d._currency_btn.config.assert_any_call(fg=main.YELLOW)
 
     def test_eur_shows_euro_yellow(self, tmp_config_dir):
         """EUR should show € in YELLOW."""
         d = self._make_dashboard(tmp_config_dir, currency="EUR")
         d._update_currency_ui()
-        d._cny_btn.config.assert_any_call(text="€")
-        d._cny_btn.config.assert_any_call(fg=main.YELLOW)
+        d._currency_btn.config.assert_any_call(text="€")
+        d._currency_btn.config.assert_any_call(fg=main.YELLOW)
 
     def test_jpy_shows_yen_yellow(self, tmp_config_dir):
         """JPY should show ¥ in YELLOW."""
         d = self._make_dashboard(tmp_config_dir, currency="JPY")
         d._update_currency_ui()
-        d._cny_btn.config.assert_any_call(text="¥")
-        d._cny_btn.config.assert_any_call(fg=main.YELLOW)
+        d._currency_btn.config.assert_any_call(text="¥")
+        d._currency_btn.config.assert_any_call(fg=main.YELLOW)
 
     def test_unknown_currency_shows_dollar_gray(self, tmp_config_dir):
         """Unknown currency should default to $ in GRAY."""
         d = self._make_dashboard(tmp_config_dir, currency="XYZ")
         d._update_currency_ui()
-        d._cny_btn.config.assert_any_call(text="$")
-        d._cny_btn.config.assert_any_call(fg=main.GRAY)
+        d._currency_btn.config.assert_any_call(text="$")
+        d._currency_btn.config.assert_any_call(fg=main.GRAY)
 
 
 class TestToggleEncrypt:
@@ -187,7 +204,8 @@ class TestToggleEncrypt:
         lock_btn = MagicMock()
         lock_row.winfo_children.return_value = [lock_icon, lock_btn]
 
-        d._toggle_encrypt(encrypt_var, lock_row)
+        with patch.object(main, "_get_fernet", return_value=MagicMock()):
+            d._toggle_encrypt(encrypt_var, lock_row)
 
         encrypt_var.set.assert_called_with(False)
         assert d.cfg["encrypt_keys"] is False
@@ -204,7 +222,9 @@ class TestToggleEncrypt:
         lock_btn = MagicMock()
         lock_row.winfo_children.return_value = [lock_icon, lock_btn]
 
-        d._toggle_encrypt(encrypt_var, lock_row)
+        with patch.object(main, "_get_fernet", return_value=MagicMock()), \
+             patch.object(main, "save_config"):
+            d._toggle_encrypt(encrypt_var, lock_row)
 
         encrypt_var.set.assert_called_with(True)
         assert d.cfg["encrypt_keys"] is True
@@ -221,7 +241,8 @@ class TestToggleEncrypt:
         lock_btn = MagicMock()
         lock_row.winfo_children.return_value = [lock_icon, lock_btn]
 
-        d._toggle_encrypt(encrypt_var, lock_row)
+        with patch.object(main, "_get_fernet", return_value=MagicMock()):
+            d._toggle_encrypt(encrypt_var, lock_row)
 
         # After toggling to False, lock icon should be GRAY
         lock_icon.config.assert_called_with(fg=main.GRAY)
@@ -238,7 +259,8 @@ class TestToggleEncrypt:
         lock_btn = MagicMock()
         lock_row.winfo_children.return_value = [lock_icon, lock_btn]
 
-        d._toggle_encrypt(encrypt_var, lock_row)
+        with patch.object(main, "_get_fernet", return_value=MagicMock()):
+            d._toggle_encrypt(encrypt_var, lock_row)
 
         # After toggling to False, button should say "Store keys unencrypted"
         lock_btn.config.assert_called_with(text="Store keys unencrypted")
@@ -253,11 +275,23 @@ class TestToggleEncrypt:
         lock_row = MagicMock()
         lock_row.winfo_children.return_value = [MagicMock(), MagicMock()]
 
-        d._toggle_encrypt(encrypt_var, lock_row)
+        with patch.object(main, "_get_fernet", return_value=MagicMock()):
+            d._toggle_encrypt(encrypt_var, lock_row)
 
         with open(tmp_config_dir, "r", encoding="utf-8") as f:
             saved = json.load(f)
         assert saved["encrypt_keys"] is False
+
+    def test_toggle_noop_without_fernet(self, tmp_config_dir):
+        """Should not toggle when cryptography/Fernet is unavailable."""
+        d = self._make_dashboard(tmp_config_dir, encrypt_keys=True)
+        encrypt_var = MagicMock()
+        encrypt_var.get.return_value = True
+        lock_row = MagicMock()
+        with patch.object(main, "_get_fernet", return_value=None):
+            d._toggle_encrypt(encrypt_var, lock_row)
+        encrypt_var.set.assert_not_called()
+        assert d.cfg["encrypt_keys"] is True
 
 
 class TestTogglePin:
