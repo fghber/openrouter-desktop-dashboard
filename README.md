@@ -18,7 +18,7 @@ A Windows desktop dashboard built with `tkinter` for monitoring OpenRouter usage
 ## Installation
 
 1. **Prerequisites**
-   - Python 3.9 or higher
+   - Python 3.10 or higher
    - Windows operating system
 
 2. **Install Dependencies**
@@ -60,6 +60,7 @@ The `config.json` file supports the following fields:
 | `last_currency` | string | Last non-USD currency chosen in Settings (used by the title-bar USD ↔ alternate toggle; set automatically) |
 | `island_state` | string | UI state: "island" (collapsed) or "expanded" (default: "island") |
 | `encrypt_keys` | boolean | Whether to encrypt API keys in config.json (default: true). Toggle in Settings with lock button |
+| `key_id` | string | Short fingerprint of the machine encryption key (set automatically; lets the app detect when the key changed) |
 
 ### UI Interaction
 
@@ -95,6 +96,11 @@ The executable will be generated in the `dist` folder.
   - Monthly model usage top 3
   - Daily breakdown by model
 
+**Note on data history**: The daily breakdown shown in the Monthly Details
+popup comes from the OpenRouter `/activity` endpoint, which only returns
+activity for the **last 30 (completed) UTC days**. Days older than that cannot
+be displayed.
+
 ## Notes
 
 - API keys are stored locally in `config.json` - treat this file as sensitive
@@ -104,7 +110,7 @@ The executable will be generated in the `dist` folder.
 
 ## Troubleshooting
 
-- **Application won't start**: Ensure Python 3.9+ is installed and dependencies are met
+- **Application won't start**: Ensure Python 3.10+ is installed and dependencies are met
 - **No data showing**: Verify your API key is valid and has sufficient permissions
 - **Window not appearing**: Check if the window is positioned off-screen (delete config.json to reset)
 - **High CPU usage**: Increase the refresh interval in config.json
@@ -121,7 +127,7 @@ This project is open source and available under the [MIT License](LICENSE).
 - by Claude Sonnet 4.6 & Gemini3.5 Flash
 A Windows desktop floating window for monitoring OpenRouter usage.
 
-![Python](https://img.shields.io/badge/Python-3.9%2B-blue)
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
 ![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
@@ -195,7 +201,7 @@ After first run, select **Settings** from right-click menu to enter API Key, or 
 | `refresh_sec` | Auto-refresh interval (seconds), default 60 |
 | `alpha` | Window transparency, 0.1 ~ 1.0 |
 | `pinned` | Whether to stay on top |
-| `timezone` | Display timezone: IANA name (e.g. `Asia/Shanghai`, `Europe/Berlin`), numeric offset in hours (e.g. `8`, `-3.5`), or empty for system local (default). On Python 3.9/3.10 on Windows, install `tzdata` for IANA name support; numeric offsets always work. |
+| `timezone` | Display timezone: IANA name (e.g. `Asia/Shanghai`, `Europe/Berlin`), numeric offset in hours (e.g. `8`, `-3.5`), or empty for system local (default). On Windows, install `tzdata` for IANA name support; numeric offsets always work. |
 | `currency` | Display currency code (default: `"USD"`) |
 | `currency_rate` | Exchange rate from USD to the selected currency (default: `1.0`) |
 | `last_currency` | Last non-USD currency from Settings (used by the title-bar toggle; set automatically) |

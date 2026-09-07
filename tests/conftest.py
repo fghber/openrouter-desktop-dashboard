@@ -20,6 +20,15 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 
+@pytest.fixture(autouse=True)
+def _no_retry_backoff(monkeypatch):
+    """
+    No-op time.sleep so retry backoffs in _fetch don't slow error-path tests.
+    """
+    import main
+    monkeypatch.setattr(main.time, "sleep", lambda _seconds: None)
+
+
 @pytest.fixture
 def tmp_config_dir(tmp_path, monkeypatch):
     """

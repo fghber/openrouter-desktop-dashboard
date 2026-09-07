@@ -27,7 +27,7 @@ class TestLoadConfig:
         # Ensure file doesn't exist
         if os.path.exists(tmp_config_dir):
             os.remove(tmp_config_dir)
-        result = main.load_config()
+        result = main.load_config()[0]
         assert result["api_key"] == ""
         assert result["refresh_sec"] == 60
         assert result["alpha"] == 0.93
@@ -37,7 +37,7 @@ class TestLoadConfig:
 
     def test_reads_existing_config(self, clean_config):
         """Should read values from an existing config.json."""
-        result = main.load_config()
+        result = main.load_config()[0]
         assert result["api_key"] == ""
         assert result["refresh_sec"] == 60
         assert result["currency"] == "USD"
@@ -62,7 +62,7 @@ class TestLoadConfig:
         with open(tmp_config_dir, "w", encoding="utf-8") as f:
             json.dump(config, f)
 
-        result = main.load_config()
+        result = main.load_config()[0]
         assert result["api_key"] == "sk-or-v1-secret-key"
 
     def test_decrypts_encrypted_extra_keys(self, tmp_config_dir):
@@ -85,7 +85,7 @@ class TestLoadConfig:
         with open(tmp_config_dir, "w", encoding="utf-8") as f:
             json.dump(config, f)
 
-        result = main.load_config()
+        result = main.load_config()[0]
         assert result["extra_keys"] == ["sk-or-v1-key1", "sk-or-v1-key2"]
 
     def test_resaves_plaintext_keys_when_encryption_enabled(self, tmp_config_dir):
@@ -109,7 +109,7 @@ class TestLoadConfig:
         with open(tmp_config_dir, "w", encoding="utf-8") as f:
             json.dump(config, f)
 
-        result = main.load_config()
+        result = main.load_config()[0]
 
         # The in-memory result should have decrypted values
         assert result["api_key"] == "sk-or-v1-plaintext-key"
@@ -141,7 +141,7 @@ class TestLoadConfig:
         with open(tmp_config_dir, "w", encoding="utf-8") as f:
             json.dump(config, f)
 
-        result = main.load_config()
+        result = main.load_config()[0]
         assert result["api_key"] == "sk-or-v1-plaintext-key"
 
         # File should still have plaintext
@@ -154,7 +154,7 @@ class TestLoadConfig:
         with open(tmp_config_dir, "w", encoding="utf-8") as f:
             f.write("{ this is not valid json }")
 
-        result = main.load_config()
+        result = main.load_config()[0]
         assert result["api_key"] == ""
         assert result["refresh_sec"] == 60
 
@@ -176,7 +176,7 @@ class TestLoadConfig:
         with open(tmp_config_dir, "w", encoding="utf-8") as f:
             json.dump(config, f)
 
-        result = main.load_config()
+        result = main.load_config()[0]
         assert result["currency"] == "CNY"
         assert result["currency_rate"] == 7.2
         assert "cny_mode" not in result
@@ -208,7 +208,7 @@ class TestLoadConfig:
         with open(tmp_config_dir, "w", encoding="utf-8") as f:
             json.dump(config, f)
 
-        result = main.load_config()
+        result = main.load_config()[0]
         assert result["currency"] == "EUR"
         assert result["currency_rate"] == 0.92
 
@@ -232,7 +232,7 @@ class TestLoadConfig:
         with open(tmp_config_dir, "w", encoding="utf-8") as f:
             json.dump(config, f)
 
-        result = main.load_config()
+        result = main.load_config()[0]
         assert result["currency"] == "USD"
         assert result["currency_rate"] == 1.0
         assert "cny_rate" not in result
@@ -271,7 +271,7 @@ class TestSaveConfig:
             saved = json.load(f)
         assert saved["api_key"] != "sk-or-v1-secret"
         # Should be decryptable back
-        assert main._decrypt_value(saved["api_key"], encrypt=True) == "sk-or-v1-secret"
+        assert main._decrypt_value(saved["api_key"]) == ("sk-or-v1-secret", "ok")
 
     def test_encrypts_extra_keys_on_save(self, tmp_config_dir):
         """Should encrypt each key in extra_keys list."""
@@ -296,8 +296,8 @@ class TestSaveConfig:
         assert saved["extra_keys"][0] != "sk-or-v1-key1"
         assert saved["extra_keys"][1] != "sk-or-v1-key2"
         # Both should decrypt back
-        assert main._decrypt_value(saved["extra_keys"][0], encrypt=True) == "sk-or-v1-key1"
-        assert main._decrypt_value(saved["extra_keys"][1], encrypt=True) == "sk-or-v1-key2"
+        assert main._decrypt_value(saved["extra_keys"][0]) == ("sk-or-v1-key1", "ok")
+        assert main._decrypt_value(saved["extra_keys"][1]) == ("sk-or-v1-key2", "ok")
 
     def test_encrypts_mgmt_key_on_save(self, tmp_config_dir):
         """Should encrypt mgmt_key when saving."""
@@ -319,7 +319,7 @@ class TestSaveConfig:
         with open(tmp_config_dir, "r", encoding="utf-8") as f:
             saved = json.load(f)
         assert saved["mgmt_key"] != "sk-or-v1-mgmt-secret"
-        assert main._decrypt_value(saved["mgmt_key"], encrypt=True) == "sk-or-v1-mgmt-secret"
+        assert main._decrypt_value(saved["mgmt_key"]) == ("sk-or-v1-mgmt-secret", "ok")
 
     def test_no_encryption_when_disabled(self, tmp_config_dir):
         """Should store plaintext when encrypt_keys=False."""
@@ -360,7 +360,7 @@ class TestSaveConfig:
             "island_state": "expanded",
         }
         main.save_config(original)
-        loaded = main.load_config()
+        loaded = main.load_config()[0]
 
         assert loaded["api_key"] == "sk-or-v1-roundtrip"
         assert loaded["refresh_sec"] == 45
@@ -397,5 +397,32 @@ class TestSaveConfig:
         assert saved["timezone"] == "Asia/Shanghai"
         assert saved["currency"] == "CNY"
         assert saved["currency_rate"] == 7.2
-        assert saved["pinned"] is True
-        assert saved["island_state"] == "island"
+
+    def test_failed_save_leaves_existing_config_intact(self, tmp_config_dir):
+        """A mid-write failure must not clobber the previous config.json."""
+        cfg = {
+            "api_key": "sk-or-v1-test",
+            "refresh_sec": 60,
+            "alpha": 0.93,
+            "timezone": "",
+            "currency": "USD",
+            "currency_rate": 1.0,
+            "encrypt_keys": False,
+            "extra_keys": [],
+            "mgmt_key": "",
+            "pinned": True,
+            "island_state": "island",
+        }
+        main.save_config(cfg)
+        with open(tmp_config_dir, "r", encoding="utf-8") as f:
+            good_content = f.read()
+
+        broken = dict(cfg)
+        broken["alpha"] = object()  # not JSON-serializable
+        with pytest.raises(TypeError):
+            main.save_config(broken)
+
+        # Previous config is untouched and no temp file is left behind
+        with open(tmp_config_dir, "r", encoding="utf-8") as f:
+            assert f.read() == good_content
+        assert not os.path.exists(str(tmp_config_dir) + ".tmp")

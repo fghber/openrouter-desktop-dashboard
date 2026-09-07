@@ -11,5 +11,6 @@
   "currency_rate": 1.0,
   "mgmt_key": "",
   "island_state": "island",
-  "encrypt_keys": true
+  "encrypt_keys": true,
+  "key_id": null
 }

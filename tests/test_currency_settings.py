@@ -38,7 +38,7 @@ class TestToggleCurrency:
             json.dump(config, f)
 
         dashboard = main.Dashboard.__new__(main.Dashboard)
-        dashboard.cfg = main.load_config()
+        dashboard.cfg = main.load_config()[0]
         dashboard._currency_btn = MagicMock()
         dashboard._tz = main.resolve_tz("")
         return dashboard
@@ -127,7 +127,7 @@ class TestUpdateCurrencyUi:
             json.dump(config, f)
 
         dashboard = main.Dashboard.__new__(main.Dashboard)
-        dashboard.cfg = main.load_config()
+        dashboard.cfg = main.load_config()[0]
         dashboard._currency_btn = MagicMock()
         return dashboard
 
@@ -189,7 +189,7 @@ class TestToggleEncrypt:
             json.dump(config, f)
 
         dashboard = main.Dashboard.__new__(main.Dashboard)
-        dashboard.cfg = main.load_config()
+        dashboard.cfg = main.load_config()[0]
         return dashboard
 
     def test_toggle_from_true_to_false(self, tmp_config_dir):
@@ -316,7 +316,7 @@ class TestTogglePin:
             json.dump(config, f)
 
         dashboard = main.Dashboard.__new__(main.Dashboard)
-        dashboard.cfg = main.load_config()
+        dashboard.cfg = main.load_config()[0]
         dashboard._pinned = pinned
         dashboard.root = MagicMock()
         dashboard._pin_lbl = MagicMock()

@@ -48,7 +48,7 @@ class TestUpdateUiErrors:
             json.dump(config, f)
 
         dashboard = main.Dashboard.__new__(main.Dashboard)
-        dashboard.cfg = main.load_config()
+        dashboard.cfg = main.load_config()[0]
         dashboard._tz = main.resolve_tz("")
 
         # Mock all UI widgets that _update_ui touches
@@ -134,7 +134,7 @@ class TestUpdateUiSuccess:
             json.dump(config, f)
 
         dashboard = main.Dashboard.__new__(main.Dashboard)
-        dashboard.cfg = main.load_config()
+        dashboard.cfg = main.load_config()[0]
         dashboard._tz = main.resolve_tz("")
 
         # Mock all UI widgets

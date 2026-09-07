@@ -1,5 +1,6 @@
 import tkinter as tk
 import tkinter.ttk as ttk
+from tkinter import messagebox
 import requests
 import json
 import threading
@@ -8,6 +9,7 @@ import os
 import sys
 import hashlib
 import base64
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone, timedelta
 try:
     from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -245,29 +247,56 @@ CONFIG_PATH = os.path.join(_get_config_dir(), 'config.json')
 # Fields that should be encrypted in config.json
 ENCRYPTED_FIELDS = {'api_key', 'extra_keys', 'mgmt_key'}
 
-def _get_machine_id():
-    """Generate a machine-specific identifier for encryption key derivation."""
+def _machine_keys():
+    """32-byte key candidates, preferred first: Windows MachineGuid (stable
+    across network/adapter changes), then the legacy MAC derivation so configs
+    written by older builds still decrypt and migrate on the next save.
+
+    MachineGuid is read from the 64-bit registry view so a 32-bit Python build
+    doesn't silently lose the stable key to WOW64 redirection.
+    """
+    keys = []
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                            r'SOFTWARE\Microsoft\Cryptography', 0,
+                            winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as key:
+            guid = winreg.QueryValueEx(key, 'MachineGuid')[0]
+        keys.append(hashlib.sha256(guid.encode()).digest())
+    except Exception:
+        pass
     try:
         import uuid
-        # Use MAC address as machine identifier
-        mac = str(uuid.getnode())
-        return hashlib.sha256(mac.encode()).digest()
+        keys.append(hashlib.sha256(str(uuid.getnode()).encode()).digest())
     except Exception:
-        # Fallback: use a fixed but obscure key (still better than plaintext)
-        return hashlib.sha256(b'openrouter-dashboard-local-key').digest()
+        pass
+    return keys
 
-def _get_fernet():
-    """Create a Fernet cipher using a machine-derived key."""
+def _key_id():
+    """Short fingerprint of the primary key, stored in config.json so the next
+    load can tell when the machine key changed. Not a secret: MachineGuid
+    itself is readable by any local process."""
+    keys = _machine_keys()
+    return hashlib.sha256(keys[0]).hexdigest()[:8] if keys else None
+
+def _fernet_candidates():
+    """Fernet ciphers for all key candidates; candidates[0] encrypts, all decrypt."""
     try:
         from cryptography.fernet import Fernet
-        key = base64.urlsafe_b64encode(_get_machine_id())
-        return Fernet(key)
     except ImportError:
-        return None
+        return []
+    return [Fernet(base64.urlsafe_b64encode(k)) for k in _machine_keys()]
+
+def _get_fernet():
+    """Primary Fernet cipher (stable machine key), or None if cryptography is missing."""
+    candidates = _fernet_candidates()
+    return candidates[0] if candidates else None
 
 def _is_encrypted(value):
     """Check if a value looks like a Fernet-encrypted token."""
-    return isinstance(value, str) and value.startswith('gAAAAA')
+    # strip() so a token padded by a manual config.json edit can't slip past
+    # the guard and get encrypted a second time
+    return isinstance(value, str) and value.strip().startswith('gAAAAA')
 
 def _encrypt_value(value, encrypt=True):
     """Encrypt a string value. Returns the encrypted string or the original if encryption unavailable or disabled."""
@@ -284,24 +313,80 @@ def _encrypt_value(value, encrypt=True):
     except Exception:
         return value
 
-def _decrypt_value(value, encrypt=True):
-    """Decrypt a string value. Returns the decrypted string or the original if decryption fails or encryption disabled.
-    Recursively decrypts to handle values that were accidentally double-encrypted."""
-    if not value or not encrypt:
-        return value
-    f = _get_fernet()
-    if f is None:
-        return value
-    try:
-        dec = f.decrypt(value.encode('utf-8')).decode('utf-8')
-        # If the decrypted result is still a Fernet token, decrypt again
-        # (handles accidental double-encryption)
-        if _is_encrypted(dec):
-            return _decrypt_value(dec, encrypt)
-        return dec
-    except Exception:
-        # Value might be plaintext (old config or manually edited)
-        return value
+def _decrypt_value(value, max_layers=3):
+    """Peel up to max_layers nested Fernet tokens (older builds without the
+    re-encryption guard wrote doubles).
+
+    Returns (value, status):
+      'plain'  – not an encrypted token, returned unchanged
+      'ok'     – fully decrypted with the current stable machine key
+      'legacy' – decrypted via a legacy key, or with redundant layers; caller
+                 should re-save to normalize the token to the stable key
+      'stuck'  – looks encrypted but no known key can decrypt it; returned
+                 byte-identical so dead ciphertext is never silently used,
+                 rewritten, or half-peeled
+    """
+    if not value or not isinstance(value, str):
+        return value, 'plain'
+    if not _is_encrypted(value):
+        return value, 'plain'
+    token, ring, legacy = value.strip(), _fernet_candidates(), False
+    for layers in range(1, max_layers + 1):
+        for i, f in enumerate(ring):
+            try:
+                token = f.decrypt(token.encode('utf-8')).decode('utf-8')
+            except Exception:  # wrong key, or malformed token (binascii.Error)
+                continue
+            legacy = legacy or i > 0
+            break
+        else:
+            # No key opened this layer: keep the original bytes in memory and
+            # on disk rather than leaving half-peeled ciphertext around.
+            return value, 'stuck'
+        if not _is_encrypted(token):
+            return token, ('legacy' if (legacy or layers > 1) else 'ok')
+    return value, 'stuck'
+
+def _as_key_list(value):
+    """Normalize extra_keys, which hand-edited configs may store as a plain
+    string (encrypting per character would destroy it) or not a list at all."""
+    if isinstance(value, str):
+        return [value] if value else []
+    return value if isinstance(value, list) else []
+
+def _decrypt_values(values, encrypt):
+    """Decrypt a list of sensitive values.
+
+    Returns (values, stuck_count, needs_resave) — re-save when the disk state
+    doesn't match the requested storage mode: plaintext present while
+    encryption is on, tokens written by a legacy key (or carrying redundant
+    layers) while it is on, or any ciphertext left while it is off. Stuck
+    values never trigger a re-save; rewriting dead ciphertext can't recover
+    it and would only hide the problem from the user.
+    """
+    out, stuck, resave = [], 0, False
+    for v in values:
+        dec, status = _decrypt_value(v)
+        if status == 'stuck':
+            stuck += 1
+        elif ((encrypt and status == 'plain' and bool(dec))
+              or status == 'legacy'
+              or (not encrypt and status != 'plain')):
+            resave = True
+        out.append(dec)
+    return out, stuck, resave
+
+def _has_stuck_values(cfg):
+    """True if any sensitive field holds a token no known key can decrypt."""
+    for field in ENCRYPTED_FIELDS:
+        if field == 'extra_keys':
+            values = _as_key_list(cfg.get(field))
+        else:
+            values = [cfg.get(field)]
+        for v in values:
+            if _decrypt_value(v)[1] == 'stuck':
+                return True
+    return False
 
 
 def enable_window_effects(hwnd):
@@ -378,29 +463,31 @@ def load_config():
         d['currency'] = 'USD'
     if not d.get('currency_rate'):
         d['currency_rate'] = 1.0
-    # Decrypt sensitive fields if encryption is enabled
+    # Detect a machine-key change (vs what was on disk) so the stuck-keys
+    # warning can say why instead of guessing.
+    key_changed = bool(raw.get('key_id')) and raw['key_id'] != _key_id()
+    # Decrypt sensitive fields. _decrypt_values decides per value whether the
+    # config needs a re-save; stuck values are reported for the warning.
     encrypt = d.get('encrypt_keys', True)
+    stuck_fields = []
     for field in ENCRYPTED_FIELDS:
-        if field in d:
-            if field == 'extra_keys':
-                decrypted_keys = []
-                for k in d[field]:
-                    dec = _decrypt_value(k, encrypt)
-                    # If the value wasn't encrypted (plaintext), mark for re-save
-                    if encrypt and k == dec and k:
-                        needs_resave = True
-                    decrypted_keys.append(dec)
-                d[field] = decrypted_keys
-            else:
-                dec = _decrypt_value(d[field], encrypt)
-                # If the value wasn't encrypted (plaintext), mark for re-save
-                if encrypt and d[field] == dec and d[field]:
-                    needs_resave = True
-                d[field] = dec
-    # Re-save to encrypt plaintext keys and/or persist cny_* migration
+        if field not in d:
+            continue
+        if field == 'extra_keys':
+            d[field], stuck, resave = _decrypt_values(_as_key_list(d[field]), encrypt)
+        else:
+            vals, stuck, resave = _decrypt_values([d[field]], encrypt)
+            d[field] = vals[0]
+        if stuck:
+            stuck_fields.append(field)
+        if resave:
+            needs_resave = True
+    # Re-save to encrypt plaintext keys, migrate legacy-key or redundant-layer
+    # tokens to the stable machine key, or persist the cny_* migration.
     if needs_resave:
         save_config(d)
-    return d
+    d['key_id'] = _key_id()
+    return d, stuck_fields, key_changed
 
 
 def save_config(cfg):
@@ -410,22 +497,62 @@ def save_config(cfg):
     for field in ENCRYPTED_FIELDS:
         if field in cfg_to_save:
             if field == 'extra_keys':
-                cfg_to_save[field] = [_encrypt_value(k, encrypt) for k in cfg_to_save[field]]
+                keys = _as_key_list(cfg_to_save[field])
+                cfg_to_save[field] = [_encrypt_value(k, encrypt) for k in keys]
             else:
                 cfg_to_save[field] = _encrypt_value(cfg_to_save[field], encrypt)
-    with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
-        json.dump(cfg_to_save, f, indent=2, ensure_ascii=False)
+    # Fingerprint of the primary key so the next load can tell when it changed
+    cfg_to_save['key_id'] = _key_id()
+    # Write to a temp file and atomically replace, so a crash or full disk
+    # mid-write can never leave a truncated config.json behind.
+    tmp_path = f'{CONFIG_PATH}.tmp'
+    try:
+        with open(tmp_path, 'w', encoding='utf-8') as f:
+            json.dump(cfg_to_save, f, indent=2, ensure_ascii=False)
+        os.replace(tmp_path, CONFIG_PATH)
+    except Exception:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 class Dashboard:
     def __init__(self):
-        self.cfg = load_config()
+        self.cfg, stuck_fields, key_changed = load_config()
         self._tz = resolve_tz(self.cfg.get('timezone', ''))
         self.root = tk.Tk()
         self._setup_window()
         self._build_ui()
         self._schedule_refresh()
+        if stuck_fields:
+            # Let the window come up first, then explain why keys don't work.
+            self.root.after(
+                800,
+                lambda: self._warn_stuck_keys(sorted(set(stuck_fields)),
+                                              key_changed)
+            )
         self.root.mainloop()
+
+    def _warn_stuck_keys(self, fields, key_changed):
+        """One-time warning when stored keys cannot be decrypted on this machine."""
+        if key_changed:
+            reason = ("this machine's primary encryption key has changed\n"
+                      "(for example after a Windows reinstall)")
+        else:
+            reason = ("the key that encrypted them is not available here\n"
+                      "(the cryptography library may be missing, or the key\n"
+                      "was derived from hardware that has since changed)")
+        try:
+            messagebox.showwarning(
+                'OpenRouter Dashboard',
+                'Some stored API keys ({}) could not be decrypted:\n{}\n\n'
+                'They were left untouched in config.json. Re-enter them in\n'
+                'Settings to restore them.'.format(', '.join(fields), reason)
+            )
+        except Exception:
+            pass
 
     def _now(self):
         """Return current time in the configured timezone."""
@@ -896,6 +1023,17 @@ class Dashboard:
         if _get_fernet() is None:
             return
         new_val = not encrypt_var.get()
+        if not new_val and _has_stuck_values(self.cfg):
+            # Undecryptable ciphertext in memory: saving with the flag off
+            # would bake it into config.json permanently — refuse instead.
+            encrypt_var.set(not new_val)
+            messagebox.showwarning(
+                'OpenRouter Dashboard',
+                'Stored keys are encrypted and cannot be decrypted on this\n'
+                'machine, so encryption cannot be turned off safely.\n'
+                'Re-enter the keys in Settings first.'
+            )
+            return
         encrypt_var.set(new_val)
         self.cfg['encrypt_keys'] = new_val
         # Update lock icon color (first child)
@@ -904,8 +1042,9 @@ class Dashboard:
         # Update lock button text (second child)
         lock_btn = lock_row.winfo_children()[1]
         lock_btn.config(text='Store keys encrypted' if new_val else 'Store keys unencrypted')
-        # Re-save config with new encryption setting
-        # This will re-encrypt or decrypt all sensitive fields
+        # Re-save config with the new encryption setting. In-memory values are
+        # plaintext here (guaranteed by the stuck check above), so this
+        # encrypts them when enabling and stores them as-is when disabling.
         save_config(self.cfg)
 
     # ── Island Animation & Hover Effects ──────────────────────────────────────
@@ -1322,6 +1461,91 @@ class Dashboard:
 
     # ── Data ─────────────────────────────────────────────────────────────────
 
+    def _fetch_credits(self, headers):
+        """Credits API: balance + historical total spend (account level, any key returns same result).
+        Returns (balance, global_total_usage); both None = credits fetch failed (distinct from real $0)."""
+        balance = None
+        global_total_usage = None
+        for attempt in range(3):
+            try:
+                rc = requests.get('https://openrouter.ai/api/v1/credits',
+                                  headers=headers, timeout=8)
+                if rc.status_code == 200:
+                    cd = rc.json().get('data', {})
+                    granted = float(cd.get('total_credits', 0) or 0)
+                    used    = float(cd.get('total_usage',   0) or 0)
+                    balance = granted - used
+                    global_total_usage = used
+                break
+            except Exception:
+                if attempt < 2:
+                    time.sleep(2)
+        return balance, global_total_usage
+
+    def _fetch_extra_key_usage(self, key):
+        """One extra key's (usage_daily, usage_monthly); (0.0, 0.0) when the key can't be fetched."""
+        for attempt in range(2):
+            try:
+                rk = requests.get('https://openrouter.ai/api/v1/auth/key',
+                                  headers={'Authorization': f'Bearer {key}'},
+                                  timeout=8)
+                if rk.status_code == 200:
+                    kd = rk.json().get('data', {})
+                    return (float(kd.get('usage_daily',   0) or 0),
+                            float(kd.get('usage_monthly', 0) or 0))
+                break
+            except Exception:
+                if attempt < 1:
+                    time.sleep(1)
+        return 0.0, 0.0
+
+    def _fetch_activity(self, mgmt_key):
+        """Activity API: monthly model TOP 3 + daily breakdown.
+        Activity has audit delay (today's spend often appears tomorrow), so it is
+        only used for monthly details and TOP3, not for the daily/monthly spend cards."""
+        top3 = []
+        top3_latest = ''
+        daily_breakdown = {}
+        now_utc = datetime.now(tz=timezone.utc)
+        month_prefix = now_utc.strftime('%Y-%m')
+        for attempt in range(3):
+            try:
+                rg = requests.get(
+                    'https://openrouter.ai/api/v1/activity',
+                    headers={'Authorization': f'Bearer {mgmt_key}'},
+                    params={'limit': 1000},
+                    timeout=10,
+                )
+                if rg.status_code == 200:
+                    model_cost: dict = {}
+                    daily_breakdown: dict = {}
+                    latest_date = ''
+                    all_data = rg.json().get('data', [])
+                    for g in all_data:
+                        gdate = g.get('date', '')
+                        if not gdate.startswith(month_prefix):
+                            continue
+                        day = gdate[:10]
+                        if day > latest_date:
+                            latest_date = day
+                        model = g.get('model', '')
+                        cost  = float(g.get('usage', 0) or 0)
+                        tok_in  = int(g.get('prompt_tokens', 0) or 0)
+                        tok_out = int(g.get('completion_tokens', 0) or 0)
+                        if model:
+                            model_cost[model] = model_cost.get(model, 0) + cost
+                        if day not in daily_breakdown:
+                            daily_breakdown[day] = {'cost': 0.0, 'tokens': 0}
+                        daily_breakdown[day]['cost']   += cost
+                        daily_breakdown[day]['tokens'] += tok_in + tok_out
+                    top3 = sorted(model_cost.items(), key=lambda x: x[1], reverse=True)[:3]
+                    top3_latest = latest_date
+                break
+            except Exception:
+                if attempt < 2:
+                    time.sleep(2)
+        return top3, top3_latest, daily_breakdown
+
     def _fetch(self):
         key = self.cfg.get('api_key', '').strip()
         if not key:
@@ -1348,89 +1572,30 @@ class Dashboard:
 
         d = r.json().get('data', {})
 
-        # 1. credits API: balance + historical total spend (account level, any key returns same result)
-        balance = None
-        global_total_usage = None  # None = credits fetch failed (distinct from real $0)
-        for attempt in range(3):
-            try:
-                rc = requests.get('https://openrouter.ai/api/v1/credits',
-                                  headers=headers, timeout=8)
-                if rc.status_code == 200:
-                    cd = rc.json().get('data', {})
-                    granted = float(cd.get('total_credits', 0) or 0)
-                    used    = float(cd.get('total_usage',   0) or 0)
-                    balance = granted - used
-                    global_total_usage = used
-                break
-            except Exception:
-                if attempt < 2:
-                    time.sleep(2)
-
-        # 2. Daily/monthly spend: seed from first auth/key, then sum extra keys only
+        # 1. Daily/monthly spend: seed from first auth/key, then sum extra keys only
         # usage_daily reset by OpenRouter officially at UTC 0:00 real-time, no delay, most accurate
         all_daily   = float(d.get('usage_daily',   0) or 0)
         all_monthly = float(d.get('usage_monthly', 0) or 0)
         extra_keys = [k for k in self.cfg.get('extra_keys', []) if k and k != key]
-        for k in extra_keys:
-            for attempt in range(2):
-                try:
-                    rk = requests.get('https://openrouter.ai/api/v1/auth/key',
-                                      headers={'Authorization': f'Bearer {k}'},
-                                      timeout=8)
-                    if rk.status_code == 200:
-                        kd = rk.json().get('data', {})
-                        all_daily   += float(kd.get('usage_daily',   0) or 0)
-                        all_monthly += float(kd.get('usage_monthly', 0) or 0)
-                    break
-                except Exception:
-                    if attempt < 1:
-                        time.sleep(1)
 
-        # model top3 + daily breakdown — requires management key
-        top3 = []
-        top3_latest = ''
-        daily_breakdown = {}
-        # activity API has audit delay (today's spend often appears tomorrow), only used for monthly details and TOP3, not for daily/monthly spend cards
+        # 2. Credits, extra keys, and activity are independent: fetch them (and each
+        #    extra key) concurrently so one slow or retrying endpoint no longer makes
+        #    the whole refresh cycle wait on the sum of all timeouts/retries.
         mgmt_key = self.cfg.get('mgmt_key', '').strip()
-        if mgmt_key:
-            now_utc = datetime.now(tz=timezone.utc)
-            month_prefix = now_utc.strftime('%Y-%m')
-            for attempt in range(3):
-                try:
-                    rg = requests.get(
-                        'https://openrouter.ai/api/v1/activity',
-                        headers={'Authorization': f'Bearer {mgmt_key}'},
-                        params={'limit': 1000},
-                        timeout=10,
-                    )
-                    if rg.status_code == 200:
-                        model_cost: dict = {}
-                        daily_breakdown: dict = {}
-                        latest_date = ''
-                        all_data = rg.json().get('data', [])
-                        for g in all_data:
-                            gdate = g.get('date', '')
-                            if not gdate.startswith(month_prefix):
-                                continue
-                            day = gdate[:10]
-                            if day > latest_date:
-                                latest_date = day
-                            model = g.get('model', '')
-                            cost  = float(g.get('usage', 0) or 0)
-                            tok_in  = int(g.get('prompt_tokens', 0) or 0)
-                            tok_out = int(g.get('completion_tokens', 0) or 0)
-                            if model:
-                                model_cost[model] = model_cost.get(model, 0) + cost
-                            if day not in daily_breakdown:
-                                daily_breakdown[day] = {'cost': 0.0, 'tokens': 0}
-                            daily_breakdown[day]['cost']   += cost
-                            daily_breakdown[day]['tokens'] += tok_in + tok_out
-                        top3 = sorted(model_cost.items(), key=lambda x: x[1], reverse=True)[:3]
-                        top3_latest = latest_date
-                    break
-                except Exception:
-                    if attempt < 2:
-                        time.sleep(2)
+        with ThreadPoolExecutor(max_workers=min(8, 2 + len(extra_keys))) as pool:
+            credits_fut  = pool.submit(self._fetch_credits, headers)
+            activity_fut = pool.submit(self._fetch_activity, mgmt_key) if mgmt_key else None
+            extra_futs   = [pool.submit(self._fetch_extra_key_usage, k) for k in extra_keys]
+
+            balance, global_total_usage = credits_fut.result()
+            if activity_fut is not None:
+                top3, top3_latest, daily_breakdown = activity_fut.result()
+            else:
+                top3, top3_latest, daily_breakdown = [], '', {}
+            for fut in extra_futs:
+                daily, monthly = fut.result()
+                all_daily   += daily
+                all_monthly += monthly
 
         return {
             'ok':                     True,

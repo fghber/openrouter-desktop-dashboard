@@ -27,6 +27,27 @@ def make_mock_response(status_code=200, json_data=None, text=""):
     return resp
 
 
+def route_requests(mock_requests, url_responses=None, key_responses=None):
+    """Answer mocked requests by URL fragment and/or exact bearer key.
+
+    _fetch issues its independent calls concurrently, so call order is
+    nondeterministic and ordered side_effect lists cannot be used. URL
+    fragments are matched first; bearer keys disambiguate calls hitting the
+    same endpoint (extra keys vs the main key on /auth/key).
+    """
+    def side_effect(url, headers=None, **kwargs):
+        for fragment, resp in (url_responses or {}).items():
+            if fragment in url:
+                return resp
+        if key_responses and headers:
+            bearer = headers.get('Authorization', '')
+            for key, resp in key_responses.items():
+                if bearer == f'Bearer {key}':
+                    return resp
+        raise AssertionError(f'unexpected request: {url} with {headers}')
+    mock_requests.side_effect = side_effect
+
+
 class TestFetchNoKey:
     """Tests for _fetch when no API key is set."""
 
@@ -50,7 +71,7 @@ class TestFetchNoKey:
 
         # Create a Dashboard-like object without calling __init__
         dashboard = main.Dashboard.__new__(main.Dashboard)
-        dashboard.cfg = main.load_config()
+        dashboard.cfg = main.load_config()[0]
 
         result = dashboard._fetch()
         assert result == {"error": "no_key"}
@@ -80,7 +101,7 @@ class TestFetchAuthKey:
         mock_requests.return_value = make_mock_response(status_code=401)
 
         dashboard = main.Dashboard.__new__(main.Dashboard)
-        dashboard.cfg = main.load_config()
+        dashboard.cfg = main.load_config()[0]
 
         result = dashboard._fetch()
         assert result == {"error": "401"}
@@ -106,7 +127,7 @@ class TestFetchAuthKey:
         mock_requests.return_value = make_mock_response(status_code=500)
 
         dashboard = main.Dashboard.__new__(main.Dashboard)
-        dashboard.cfg = main.load_config()
+        dashboard.cfg = main.load_config()[0]
 
         result = dashboard._fetch()
         assert result == {"error": "HTTP 500"}
@@ -132,7 +153,7 @@ class TestFetchAuthKey:
         mock_requests.side_effect = ConnectionError("Network unreachable")
 
         dashboard = main.Dashboard.__new__(main.Dashboard)
-        dashboard.cfg = main.load_config()
+        dashboard.cfg = main.load_config()[0]
 
         result = dashboard._fetch()
         assert "error" in result
@@ -181,10 +202,12 @@ class TestFetchSuccess:
             }
         })
 
-        mock_requests.side_effect = [auth_response, credits_response]
+        route_requests(mock_requests,
+                       url_responses={'auth/key': auth_response,
+                                      'credits': credits_response})
 
         dashboard = main.Dashboard.__new__(main.Dashboard)
-        dashboard.cfg = main.load_config()
+        dashboard.cfg = main.load_config()[0]
 
         result = dashboard._fetch()
 
@@ -219,13 +242,14 @@ class TestFetchSuccess:
             "data": {"usage_daily": 3.0, "usage_monthly": 30.0}
         })
 
-        mock_requests.side_effect = [
-            auth_response, credits_response,
-            extra1_response, extra2_response
-        ]
+        route_requests(mock_requests,
+                       url_responses={'credits': credits_response},
+                       key_responses={'sk-or-v1-test': auth_response,
+                                      'sk-or-v1-extra1': extra1_response,
+                                      'sk-or-v1-extra2': extra2_response})
 
         dashboard = main.Dashboard.__new__(main.Dashboard)
-        dashboard.cfg = main.load_config()
+        dashboard.cfg = main.load_config()[0]
 
         result = dashboard._fetch()
 
@@ -233,6 +257,40 @@ class TestFetchSuccess:
         assert result["all_monthly"] == 100.0  # 20 + 50 + 30
         # auth + credits + 2 extras (main key not re-fetched)
         assert mock_requests.call_count == 4
+
+    def test_fetch_many_extra_keys_beyond_worker_cap(self, tmp_config_dir, mock_requests):
+        """Extra keys beyond the small worker pool are queued, not dropped."""
+        extras = [f'sk-or-v1-extra{i}' for i in range(10)]
+        self._setup_config(tmp_config_dir, extra_keys=extras)
+
+        auth_response = make_mock_response(json_data={
+            "data": {
+                "limit": 1000, "limit_remaining": 800, "label": "Main",
+                "usage_daily": 1.0, "usage_monthly": 10.0,
+            }
+        })
+        credits_response = make_mock_response(json_data={
+            "data": {"total_credits": 100.0, "total_usage": 20.0}
+        })
+        key_responses = {'sk-or-v1-test': auth_response}
+        for k in extras:
+            key_responses[k] = make_mock_response(json_data={
+                "data": {"usage_daily": 2.0, "usage_monthly": 20.0}
+            })
+
+        route_requests(mock_requests,
+                       url_responses={'credits': credits_response},
+                       key_responses=key_responses)
+
+        dashboard = main.Dashboard.__new__(main.Dashboard)
+        dashboard.cfg = main.load_config()[0]
+
+        result = dashboard._fetch()
+
+        assert result["all_daily"] == 1.0 + 10 * 2.0
+        assert result["all_monthly"] == 10.0 + 10 * 20.0
+        # auth + credits + 10 extras
+        assert mock_requests.call_count == 12
 
     def test_fetch_does_not_double_count_duplicate_extra_key(self, tmp_config_dir, mock_requests):
         """Extra key matching the main key should be skipped."""
@@ -255,12 +313,13 @@ class TestFetchSuccess:
             "data": {"usage_daily": 1.0, "usage_monthly": 10.0}
         })
 
-        mock_requests.side_effect = [
-            auth_response, credits_response, extra1_response
-        ]
+        route_requests(mock_requests,
+                       url_responses={'credits': credits_response},
+                       key_responses={'sk-or-v1-test': auth_response,
+                                      'sk-or-v1-extra1': extra1_response})
 
         dashboard = main.Dashboard.__new__(main.Dashboard)
-        dashboard.cfg = main.load_config()
+        dashboard.cfg = main.load_config()[0]
 
         result = dashboard._fetch()
 
@@ -282,10 +341,12 @@ class TestFetchSuccess:
             "data": {"total_credits": 100.0, "total_usage": 20.0}
         })
 
-        mock_requests.side_effect = [auth_response, credits_response]
+        route_requests(mock_requests,
+                       url_responses={'auth/key': auth_response,
+                                      'credits': credits_response})
 
         dashboard = main.Dashboard.__new__(main.Dashboard)
-        dashboard.cfg = main.load_config()
+        dashboard.cfg = main.load_config()[0]
 
         result = dashboard._fetch()
 
@@ -314,12 +375,13 @@ class TestFetchSuccess:
             ]
         })
 
-        mock_requests.side_effect = [
-            auth_response, credits_response, activity_response
-        ]
+        route_requests(mock_requests,
+                       url_responses={'auth/key': auth_response,
+                                      'credits': credits_response,
+                                      'activity': activity_response})
 
         dashboard = main.Dashboard.__new__(main.Dashboard)
-        dashboard.cfg = main.load_config()
+        dashboard.cfg = main.load_config()[0]
 
         result = dashboard._fetch()
 
@@ -357,12 +419,13 @@ class TestFetchSuccess:
             ]
         })
 
-        mock_requests.side_effect = [
-            auth_response, credits_response, activity_response
-        ]
+        route_requests(mock_requests,
+                       url_responses={'auth/key': auth_response,
+                                      'credits': credits_response,
+                                      'activity': activity_response})
 
         dashboard = main.Dashboard.__new__(main.Dashboard)
-        dashboard.cfg = main.load_config()
+        dashboard.cfg = main.load_config()[0]
 
         result = dashboard._fetch()
 
@@ -385,12 +448,13 @@ class TestFetchSuccess:
         })
         activity_response = make_mock_response(json_data={"data": []})
 
-        mock_requests.side_effect = [
-            auth_response, credits_response, activity_response
-        ]
+        route_requests(mock_requests,
+                       url_responses={'auth/key': auth_response,
+                                      'credits': credits_response,
+                                      'activity': activity_response})
 
         dashboard = main.Dashboard.__new__(main.Dashboard)
-        dashboard.cfg = main.load_config()
+        dashboard.cfg = main.load_config()[0]
 
         result = dashboard._fetch()
 
@@ -410,12 +474,13 @@ class TestFetchSuccess:
         })
         activity_response = make_mock_response(status_code=500)
 
-        mock_requests.side_effect = [
-            auth_response, credits_response, activity_response
-        ]
+        route_requests(mock_requests,
+                       url_responses={'auth/key': auth_response,
+                                      'credits': credits_response,
+                                      'activity': activity_response})
 
         dashboard = main.Dashboard.__new__(main.Dashboard)
-        dashboard.cfg = main.load_config()
+        dashboard.cfg = main.load_config()[0]
 
         result = dashboard._fetch()
 
@@ -431,10 +496,12 @@ class TestFetchSuccess:
         })
         credits_response = make_mock_response(status_code=500)
 
-        mock_requests.side_effect = [auth_response, credits_response]
+        route_requests(mock_requests,
+                       url_responses={'auth/key': auth_response,
+                                      'credits': credits_response})
 
         dashboard = main.Dashboard.__new__(main.Dashboard)
-        dashboard.cfg = main.load_config()
+        dashboard.cfg = main.load_config()[0]
 
         result = dashboard._fetch()
 
@@ -454,12 +521,13 @@ class TestFetchSuccess:
         # Extra key returns 401
         extra_response = make_mock_response(status_code=401)
 
-        mock_requests.side_effect = [
-            auth_response, credits_response, extra_response
-        ]
+        route_requests(mock_requests,
+                       url_responses={'credits': credits_response},
+                       key_responses={'sk-or-v1-test': auth_response,
+                                      'sk-or-v1-extra1': extra_response})
 
         dashboard = main.Dashboard.__new__(main.Dashboard)
-        dashboard.cfg = main.load_config()
+        dashboard.cfg = main.load_config()[0]
 
         result = dashboard._fetch()
 
@@ -488,12 +556,13 @@ class TestFetchSuccess:
             ]
         })
 
-        mock_requests.side_effect = [
-            auth_response, credits_response, activity_response
-        ]
+        route_requests(mock_requests,
+                       url_responses={'auth/key': auth_response,
+                                      'credits': credits_response,
+                                      'activity': activity_response})
 
         dashboard = main.Dashboard.__new__(main.Dashboard)
-        dashboard.cfg = main.load_config()
+        dashboard.cfg = main.load_config()[0]
 
         result = dashboard._fetch()
 
@@ -523,12 +592,13 @@ class TestFetchSuccess:
             ]
         })
 
-        mock_requests.side_effect = [
-            auth_response, credits_response, activity_response
-        ]
+        route_requests(mock_requests,
+                       url_responses={'auth/key': auth_response,
+                                      'credits': credits_response,
+                                      'activity': activity_response})
 
         dashboard = main.Dashboard.__new__(main.Dashboard)
-        dashboard.cfg = main.load_config()
+        dashboard.cfg = main.load_config()[0]
 
         result = dashboard._fetch()
 
@@ -559,12 +629,13 @@ class TestFetchSuccess:
             ]
         })
 
-        mock_requests.side_effect = [
-            auth_response, credits_response, activity_response
-        ]
+        route_requests(mock_requests,
+                       url_responses={'auth/key': auth_response,
+                                      'credits': credits_response,
+                                      'activity': activity_response})
 
         dashboard = main.Dashboard.__new__(main.Dashboard)
-        dashboard.cfg = main.load_config()
+        dashboard.cfg = main.load_config()[0]
 
         result = dashboard._fetch()
 
