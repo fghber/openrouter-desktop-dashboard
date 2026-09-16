@@ -177,7 +177,7 @@ def resolve_tz(spec: str):
     try:
         hours = float(s)
         return timezone(timedelta(hours=hours))
-    except ValueError:
+    except (ValueError, OverflowError):
         pass
     # Try IANA zone name
     try:
@@ -354,6 +354,44 @@ def _as_key_list(value):
         return [value] if value else []
     return value if isinstance(value, list) else []
 
+def _usable_secret(value):
+    """False for empty values or stuck ciphertext that must not be sent as a credential."""
+    if not isinstance(value, str):
+        return False
+    value = value.strip()
+    if not value:
+        return False
+    return _decrypt_value(value)[1] != 'stuck'
+
+def _unique_extra_keys(extra_keys, main_key=''):
+    """Distinct usable extra keys, skipping the main key, duplicates, and stuck tokens."""
+    out, seen = [], {main_key} if main_key else set()
+    for k in _as_key_list(extra_keys):
+        if not isinstance(k, str):
+            continue
+        k = k.strip()
+        if not k or k in seen or not _usable_secret(k):
+            continue
+        seen.add(k)
+        out.append(k)
+    return out
+
+def _refresh_interval_ms(refresh_sec, default=60):
+    """Refresh period in milliseconds; invalid values fall back to default (min 10s)."""
+    try:
+        sec = int(float(refresh_sec))
+    except (TypeError, ValueError, OverflowError):
+        sec = default
+    return max(10, sec) * 1000
+
+def _currency_rate(value, default=1.0):
+    """USD→display FX rate; non-numeric or non-positive values fall back to default."""
+    try:
+        rate = float(value)
+    except (TypeError, ValueError):
+        return default
+    return rate if rate > 0 else default
+
 def _decrypt_values(values, encrypt):
     """Decrypt a list of sensitive values.
 
@@ -461,14 +499,21 @@ def load_config():
             needs_resave = True
     if not d.get('currency'):
         d['currency'] = 'USD'
-    if not d.get('currency_rate'):
-        d['currency_rate'] = 1.0
+    d['currency_rate'] = _currency_rate(d.get('currency_rate'))
+    try:
+        d['refresh_sec'] = max(10, int(float(d.get('refresh_sec') or 60)))
+    except (TypeError, ValueError, OverflowError):
+        d['refresh_sec'] = 60
+    encrypt = d.get('encrypt_keys', True)
+    if not isinstance(encrypt, bool):
+        encrypt = True
+        d['encrypt_keys'] = True
+        needs_resave = True
     # Detect a machine-key change (vs what was on disk) so the stuck-keys
     # warning can say why instead of guessing.
     key_changed = bool(raw.get('key_id')) and raw['key_id'] != _key_id()
     # Decrypt sensitive fields. _decrypt_values decides per value whether the
     # config needs a re-save; stuck values are reported for the warning.
-    encrypt = d.get('encrypt_keys', True)
     stuck_fields = []
     for field in ENCRYPTED_FIELDS:
         if field not in d:
@@ -979,7 +1024,7 @@ class Dashboard:
     def _fmt(self, usd):
         """Format a USD float according to current currency."""
         currency = self.cfg.get('currency', 'USD')
-        rate = float(self.cfg.get('currency_rate', 1.0))
+        rate = _currency_rate(self.cfg.get('currency_rate', 1.0))
         symbol, decimals, _ = CURRENCIES.get(currency, ('$', 2, False))
         if currency == 'USD':
             return f'${usd:.2f}'
@@ -1284,7 +1329,13 @@ class Dashboard:
             self.cfg['api_key']  = kv.get().strip()
             self.cfg['mgmt_key'] = mv.get().strip()
             # Read extra keys from each row Entry's StringVar
-            self.cfg['extra_keys'] = [v.get().strip() for v in extra_vars if v.get().strip()]
+            keys, seen = [], set()
+            for v in extra_vars:
+                k = v.get().strip()
+                if k and k not in seen:
+                    seen.add(k)
+                    keys.append(k)
+            self.cfg['extra_keys'] = keys
             try: self.cfg['refresh_sec'] = max(10, int(rv.get().strip()))
             except ValueError: pass
             cur = currency_var.get().strip() or 'USD'
@@ -1548,7 +1599,7 @@ class Dashboard:
 
     def _fetch(self):
         key = self.cfg.get('api_key', '').strip()
-        if not key:
+        if not _usable_secret(key):
             return {'error': 'no_key'}
         headers = {'Authorization': f'Bearer {key}'}
         last_err = None
@@ -1570,18 +1621,26 @@ class Dashboard:
         if r.status_code != 200:
             return {'error': f'HTTP {r.status_code}'}
 
-        d = r.json().get('data', {})
+        try:
+            payload = r.json()
+            d = payload.get('data', {}) if isinstance(payload, dict) else {}
+            if not isinstance(d, dict):
+                d = {}
+        except ValueError:
+            return {'error': 'invalid_response'}
 
         # 1. Daily/monthly spend: seed from first auth/key, then sum extra keys only
         # usage_daily reset by OpenRouter officially at UTC 0:00 real-time, no delay, most accurate
         all_daily   = float(d.get('usage_daily',   0) or 0)
         all_monthly = float(d.get('usage_monthly', 0) or 0)
-        extra_keys = [k for k in self.cfg.get('extra_keys', []) if k and k != key]
+        extra_keys = _unique_extra_keys(self.cfg.get('extra_keys'), key)
 
         # 2. Credits, extra keys, and activity are independent: fetch them (and each
         #    extra key) concurrently so one slow or retrying endpoint no longer makes
         #    the whole refresh cycle wait on the sum of all timeouts/retries.
         mgmt_key = self.cfg.get('mgmt_key', '').strip()
+        if not _usable_secret(mgmt_key):
+            mgmt_key = ''
         with ThreadPoolExecutor(max_workers=min(8, 2 + len(extra_keys))) as pool:
             credits_fut  = pool.submit(self._fetch_credits, headers)
             activity_fut = pool.submit(self._fetch_activity, mgmt_key) if mgmt_key else None
@@ -1758,7 +1817,7 @@ class Dashboard:
                     self.root.after_cancel(self._job)
                 except Exception:
                     pass
-            ms = max(10, self.cfg.get('refresh_sec', 60)) * 1000
+            ms = _refresh_interval_ms(self.cfg.get('refresh_sec', 60))
             self._job = self.root.after(ms, self._trigger_refresh)
         except tk.TclError:
             pass

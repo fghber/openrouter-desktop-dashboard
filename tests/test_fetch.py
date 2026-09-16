@@ -11,11 +11,20 @@ These tests mock requests.get to simulate various API responses and verify
 that _fetch correctly aggregates the data.
 """
 import json
+from datetime import datetime, timezone, timedelta
 from unittest.mock import patch, MagicMock, PropertyMock
 
 import pytest
 
 import main
+
+
+def _activity_dates():
+    """Dates in the current and previous UTC months so activity tests stay stable."""
+    now = datetime.now(timezone.utc)
+    cur = now.strftime("%Y-%m")
+    prev = (now.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+    return f"{cur}-01", f"{cur}-02", f"{cur}-15", f"{prev}-15"
 
 
 def make_mock_response(status_code=200, json_data=None, text=""):
@@ -364,13 +373,14 @@ class TestFetchSuccess:
         credits_response = make_mock_response(json_data={
             "data": {"total_credits": 100.0, "total_usage": 20.0}
         })
+        day1, day2, _, _ = _activity_dates()
         activity_response = make_mock_response(json_data={
             "data": [
-                {"date": "2026-08-01", "model": "anthropic/claude-3", "usage": 5.0,
+                {"date": day1, "model": "anthropic/claude-3", "usage": 5.0,
                  "prompt_tokens": 1000, "completion_tokens": 500},
-                {"date": "2026-08-02", "model": "openai/gpt-4", "usage": 3.0,
+                {"date": day2, "model": "openai/gpt-4", "usage": 3.0,
                  "prompt_tokens": 500, "completion_tokens": 200},
-                {"date": "2026-08-01", "model": "anthropic/claude-3", "usage": 2.0,
+                {"date": day1, "model": "anthropic/claude-3", "usage": 2.0,
                  "prompt_tokens": 300, "completion_tokens": 100},
             ]
         })
@@ -393,11 +403,11 @@ class TestFetchSuccess:
         assert result["top3"][1][1] == 3.0
 
         # daily_breakdown should aggregate by day
-        assert "2026-08-01" in result["daily_breakdown"]
-        assert result["daily_breakdown"]["2026-08-01"]["cost"] == 7.0
-        assert result["daily_breakdown"]["2026-08-01"]["tokens"] == 1900  # 1000+500+300+100
-        assert result["daily_breakdown"]["2026-08-02"]["cost"] == 3.0
-        assert result["daily_breakdown"]["2026-08-02"]["tokens"] == 700
+        assert day1 in result["daily_breakdown"]
+        assert result["daily_breakdown"][day1]["cost"] == 7.0
+        assert result["daily_breakdown"][day1]["tokens"] == 1900  # 1000+500+300+100
+        assert result["daily_breakdown"][day2]["cost"] == 3.0
+        assert result["daily_breakdown"][day2]["tokens"] == 700
 
     def test_fetch_activity_filters_by_month(self, tmp_config_dir, mock_requests):
         """Should only include activity items from the current month."""
@@ -410,11 +420,12 @@ class TestFetchSuccess:
             "data": {"total_credits": 100.0, "total_usage": 20.0}
         })
         # Activity with items from different months
+        _, _, this_month, last_month = _activity_dates()
         activity_response = make_mock_response(json_data={
             "data": [
-                {"date": "2026-08-15", "model": "model-a", "usage": 5.0,
+                {"date": this_month, "model": "model-a", "usage": 5.0,
                  "prompt_tokens": 100, "completion_tokens": 50},
-                {"date": "2026-07-15", "model": "model-b", "usage": 10.0,
+                {"date": last_month, "model": "model-b", "usage": 10.0,
                  "prompt_tokens": 200, "completion_tokens": 100},
             ]
         })
@@ -429,9 +440,9 @@ class TestFetchSuccess:
 
         result = dashboard._fetch()
 
-        # Only August data should be in daily_breakdown
-        assert "2026-08-15" in result["daily_breakdown"]
-        assert "2026-07-15" not in result["daily_breakdown"]
+        # Only the current UTC month should be in daily_breakdown
+        assert this_month in result["daily_breakdown"]
+        assert last_month not in result["daily_breakdown"]
         # top3 should only have model-a
         assert len(result["top3"]) == 1
         assert result["top3"][0][0] == "model-a"
@@ -545,13 +556,14 @@ class TestFetchSuccess:
         credits_response = make_mock_response(json_data={
             "data": {"total_credits": 100.0, "total_usage": 20.0}
         })
+        day1, _, _, _ = _activity_dates()
         activity_response = make_mock_response(json_data={
             "data": [
-                {"date": "2026-08-01", "model": "model-low", "usage": 1.0,
+                {"date": day1, "model": "model-low", "usage": 1.0,
                  "prompt_tokens": 10, "completion_tokens": 5},
-                {"date": "2026-08-01", "model": "model-high", "usage": 50.0,
+                {"date": day1, "model": "model-high", "usage": 50.0,
                  "prompt_tokens": 100, "completion_tokens": 50},
-                {"date": "2026-08-01", "model": "model-mid", "usage": 10.0,
+                {"date": day1, "model": "model-mid", "usage": 10.0,
                  "prompt_tokens": 20, "completion_tokens": 10},
             ]
         })
@@ -584,9 +596,10 @@ class TestFetchSuccess:
         credits_response = make_mock_response(json_data={
             "data": {"total_credits": 100.0, "total_usage": 20.0}
         })
+        day1, _, _, _ = _activity_dates()
         activity_response = make_mock_response(json_data={
             "data": [
-                {"date": "2026-08-01", "model": f"model-{i}", "usage": float(i),
+                {"date": day1, "model": f"model-{i}", "usage": float(i),
                  "prompt_tokens": 10, "completion_tokens": 5}
                 for i in range(1, 6)
             ]
@@ -618,13 +631,14 @@ class TestFetchSuccess:
         credits_response = make_mock_response(json_data={
             "data": {"total_credits": 100.0, "total_usage": 20.0}
         })
+        day1, _, _, _ = _activity_dates()
         activity_response = make_mock_response(json_data={
             "data": [
-                {"date": "2026-08-01", "model": "model-a", "usage": 5.0,
+                {"date": day1, "model": "model-a", "usage": 5.0,
                  "prompt_tokens": 100, "completion_tokens": 50},
-                {"date": "2026-08-01", "model": "model-b", "usage": 3.0,
+                {"date": day1, "model": "model-b", "usage": 3.0,
                  "prompt_tokens": 200, "completion_tokens": 100},
-                {"date": "2026-08-01", "model": "model-a", "usage": 2.0,
+                {"date": day1, "model": "model-a", "usage": 2.0,
                  "prompt_tokens": 50, "completion_tokens": 25},
             ]
         })
@@ -639,5 +653,5 @@ class TestFetchSuccess:
 
         result = dashboard._fetch()
 
-        assert result["daily_breakdown"]["2026-08-01"]["cost"] == 10.0  # 5 + 3 + 2
-        assert result["daily_breakdown"]["2026-08-01"]["tokens"] == 525  # 150 + 300 + 75
+        assert result["daily_breakdown"][day1]["cost"] == 10.0  # 5 + 3 + 2
+        assert result["daily_breakdown"][day1]["tokens"] == 525  # 150 + 300 + 75

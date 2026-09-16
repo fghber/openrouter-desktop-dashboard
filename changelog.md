@@ -42,6 +42,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Currency toggle position**: Moved to left side of title bar for visibility when collapsed.
 
 ### Fixed
+- **Duplicate extra keys inflated daily/monthly spend**: The same extra key listed twice (easy via Settings “Add Row”) was fetched twice and added twice. Extra keys are now de-duplicated before aggregation.
+- **Undecryptable keys were sent as Bearer tokens**: After a machine-key change, stuck Fernet ciphertext was used as the API key (401 / “Invalid Key”) and extra keys were POSTed to OpenRouter. Stuck tokens are now skipped (main key → no_key; extras/mgmt ignored) and left untouched in config.json.
+- **Non-JSON `/auth/key` body crashed the refresh worker**: HTTP 200 with invalid JSON raised `JSONDecodeError` outside the retry loop, leaving the UI stuck on “Refreshing…”. `_fetch` now returns an error dict.
+- **`refresh_sec` / `currency_rate` type crashes**: `null` or a quoted number in config.json made `max()` / `float()` raise, killing the refresh loop. Values are coerced with safe defaults.
+- **`encrypt_keys: null` treated encryption as off**: JSON null is falsy, so a load could decrypt and re-save keys as plaintext. Non-boolean `encrypt_keys` is now coerced to `true`.
+- **`resolve_tz("inf")` / huge numeric offsets crashed Settings save**: `timedelta` raised `OverflowError`, which was not caught. Those specs now fall back like unknown IANA names.
+- **Activity unit tests were calendar-dependent**: Fixtures hardcoded August 2026 dates, so they failed in September. Tests now use the current/previous UTC month.
 - **`config.json` could be truncated by a crash mid-save**: `save_config()` wrote the file in place, so a crash, power loss, or full disk during one of the frequent saves (every drag release or toggle) could leave a partially written file that loads as empty. Saves now write to a temp file and atomically `os.replace` it into place, and a failed save cleans up the temp file and leaves the previous config intact.
 - **Title-bar currency toggle reused a stale FX rate**: Cycling currencies kept one `currency_rate`, so amounts were wrong after USD→CNY/EUR. Toggle is now USD ↔ last Settings currency and preserves the rate.
 - **Legacy `cny_mode` migration never applied**: Defaults filled `currency`/`currency_rate` before the migrate check. `load_config()` now detects raw `cny_*` keys and migrates to `currency`/`currency_rate`.
