@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Peak/off-peak title-bar indicator**: Diamond symbol on the vendor clock (Beijing/Singapore, UTC+8, independent of the display `timezone` setting) for DeepSeek / Z.ai time-of-use pricing — `◆` red = both peak (Mon–Fri 14:00–18:00 Beijing), `◈` yellow = DeepSeek peak only (Mon–Fri 09:00–12:00), `◇` green = both off-peak (all other hours + Sat/Sun all day, weekend read off the Beijing calendar). Hover tooltip shows full hours and current state; refreshes on data updates plus a 30s ticker. No new dependencies, no config change.
 - **Locale-aware short date formatting**: Dates in the Monthly Details popup are now formatted according to the user's configured IANA timezone, using a built-in timezone-to-locale mapping (e.g., `Asia/Shanghai` → `2026年08月12日`, `Europe/Berlin` → `12.08.2026`, `America/Los_Angeles` → `08/12/2026`). Uses only the Python standard library — no `setlocale` calls, no new dependencies.
 - **Multi-currency support**: Replaced hardcoded CNY/USD toggle with a generic currency system supporting 20 currencies (USD, CNY, EUR, GBP, JPY, CAD, AUD, CHF, INR, KRW, BRL, RUB, TRY, ZAR, SGD, HKD, TWD, MYR, THB, IDR).
 - **Currency combobox in Settings**: Users can select any supported currency from a dropdown.

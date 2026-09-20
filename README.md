@@ -14,6 +14,7 @@ A Windows desktop dashboard built with `tkinter` for monitoring OpenRouter usage
 - API keys encrypted in config.json using machine-specific encryption (toggleable in Settings)
 - Right-click context menu for settings, refresh, pinning, and exit
 - Configurable refresh rate, window transparency, and timezone
+- Peak/off-peak indicator in the title bar for DeepSeek / Z.ai time-of-use pricing (vendor UTC+8 clock; hover for hours): `◆` red = both peak, `◈` yellow = DeepSeek peak only, `◇` green = both off-peak
 
 ## Installation
 
@@ -25,6 +26,7 @@ A Windows desktop dashboard built with `tkinter` for monitoring OpenRouter usage
    ```bash
    pip install -r requirements.txt
    ```
+   `requirements.txt` includes `tzdata`, which Windows needs for IANA timezone names (display `timezone` setting, vendor UTC+8 clock, and tests).
 
 3. **Configuration**
    - Copy `config.example.json` to `config.json`
@@ -72,6 +74,7 @@ The `config.json` file supports the following fields:
   - Exit: Close the application
 - **Double-click**: Toggle between island (collapsed) and expanded states
 - **Currency toggle**: Click the currency symbol in the title bar to switch between USD and the last non-USD currency selected in Settings
+- **Peak/off-peak diamond**: Title-bar symbol on the vendor clock (Beijing/Singapore, UTC+8) — `◆` red = both DeepSeek + Z.ai peak (Mon–Fri 14:00–18:00), `◈` yellow = DeepSeek peak only (Mon–Fri 09:00–12:00), `◇` green = both off-peak (all other hours + Sat/Sun all day). Hover for full hours.
 
 ## Building the Executable
 
@@ -141,6 +144,7 @@ A Windows desktop floating window for monitoring OpenRouter usage.
 - **Multi-currency**: Display costs in any supported currency (USD, CNY, EUR, GBP, JPY, and more) at a configurable exchange rate
 - **Edge Snap**: Drag window near screen edge to auto-snap
 - **Transparency / Always on Top**: Right-click menu to adjust transparency and pin
+- **Peak/off-peak diamond**: Title-bar `◆` / `◈` / `◇` indicator for DeepSeek / Z.ai pricing windows (UTC+8 vendor clock, hover for hours)
 - **Windows 11 Native Rounded Corners and Shadows**
 
 ## Screenshots
@@ -219,6 +223,7 @@ Full field list (including `island_state`, `encrypt_keys`, etc.): see **Configur
 | Right-click menu | Settings / Refresh / Transparency / Pin / Exit |
 | Click date card | Popup daily usage details |
 | Click currency symbol | Toggle USD ↔ last non-USD currency from Settings |
+| Hover peak diamond | Show DeepSeek / Z.ai peak hours and current vendor-clock state |
 
 ## Package as exe
 

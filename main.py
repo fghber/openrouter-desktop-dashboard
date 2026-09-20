@@ -233,6 +233,52 @@ BORDER = '#30363d'
 CYAN   = '#58a6ff'
 PURPLE = '#bc8cff'
 
+# ── Vendor peak/off-peak (DeepSeek ◆ / Z.ai) ─────────────────────────────────
+# Both schedules are defined on UTC+8 wall clock (Beijing / Singapore, no DST).
+# DeepSeek: peak Mon–Fri 09:00–12:00 + 14:00–18:00 Beijing, off-peak otherwise
+#           (½ price, Sat/Sun all-day off-peak).
+# Z.ai:     peak Mon–Fri 14:00–18:00 Singapore, off-peak otherwise
+#           (weekends all-day off-peak). Z-peak ⊆ DeepSeek-peak, so there is
+#           no reachable Z-only-peak state.
+VENDOR_TZ_NAME = 'Asia/Shanghai'
+
+# state -> (glyph, color, tooltip short label)
+PEAK_STYLES = {
+    'both_peak':    ('◆', RED,    'both peak'),
+    'ds_only':      ('◈', YELLOW, 'DeepSeek peak only'),
+    'both_offpeak': ('◇', GREEN,  'both off-peak'),
+}
+
+
+def _vendor_tz():
+    """Vendor wall clock (UTC+8). Fixed offset fallback for Windows without tzdata."""
+    try:
+        return ZoneInfo(VENDOR_TZ_NAME)
+    except Exception:
+        return timezone(timedelta(hours=8))
+
+
+def _vendor_now():
+    """Current time on the vendor clock."""
+    return datetime.now(tz=_vendor_tz())
+
+
+def get_peak_state(dt):
+    """Return 'both_peak' | 'ds_only' | 'both_offpeak' for a vendor-clock datetime.
+
+    Weekday is read off the vendor (Beijing) calendar so Fri 16:00 UTC
+    (= Sat 00:00 Beijing) already counts as weekend off-peak.
+    """
+    if dt.weekday() >= 5:  # Sat/Sun Beijing: all-day off-peak
+        return 'both_offpeak'
+    t = dt.hour + dt.minute / 60.0 + dt.second / 3600.0
+    ds_peak = (9 <= t < 12) or (14 <= t < 18)
+    if not ds_peak:
+        return 'both_offpeak'
+    if 14 <= t < 18:
+        return 'both_peak'  # Z-peak lives inside this window
+    return 'ds_only'
+
 def _get_config_dir():
     """Return config file directory: use exe directory when packaged, script directory when running .py directly."""
     if getattr(sys, 'frozen', False):
@@ -839,6 +885,14 @@ class Dashboard:
         self._dot.pack(side='left', padx=(6, 1))
         self._status.pack(side='left')
 
+        # Peak/off-peak indicator (DeepSeek ◆ / Z.ai, vendor UTC+8 clock)
+        self._peak_lbl = tk.Label(bar, text='◇', bg=BG2, fg=GREEN,
+                                  font=('Segoe UI', 8, 'bold'), padx=2)
+        self._peak_lbl.pack(side='left', padx=(4, 0))
+        self._peak_lbl.bind('<Enter>', self._show_peak_tip)
+        self._peak_lbl.bind('<Leave>', self._hide_peak_tip)
+        self._peak_tip = None
+
         # Currency toggle — left side so it's always visible when collapsed
         self._currency_btn = tk.Label(bar, text='$', bg=BG2, fg=GRAY,
                                   font=('Segoe UI', 8, 'bold'), cursor='hand2', padx=4)
@@ -1020,6 +1074,77 @@ class Dashboard:
         self._currency_btn.config(
             fg=YELLOW if currency in CURRENCIES and currency != 'USD' else GRAY
         )
+
+    # ── Peak/off-peak indicator ──────────────────────────────────────────
+
+    def _peak_tip_text(self, now=None):
+        """Tooltip text with vendor hours and current vendor-clock state."""
+        try:
+            now = now or _vendor_now()
+        except Exception:
+            return 'Peak hours unavailable'
+        state = get_peak_state(now)
+        short = PEAK_STYLES[state][2]
+        try:
+            when = now.strftime('%H:%M %a')
+        except Exception:
+            when = ''
+        return (
+            f'DeepSeek: ◆ peak Mon–Fri 9–12, 14–18 Beijing\n'
+            f'Z.ai: peak Mon–Fri 14–18 Singapore\n'
+            f'Now: {when} Beijing — {short}'
+        )
+
+    def _update_peak_indicator(self):
+        """Refresh the title-bar peak/off-peak glyph from the vendor clock."""
+        if not hasattr(self, '_peak_lbl'):
+            return
+        try:
+            now = _vendor_now()
+        except Exception:
+            return
+        try:
+            state = get_peak_state(now)
+            glyph, color, _short = PEAK_STYLES[state]
+            self._peak_lbl.config(text=glyph, fg=color)
+        except tk.TclError:
+            pass
+
+    def _tick_peak(self):
+        """Self-rescheduling 30s ticker so the glyph flips at window edges."""
+        try:
+            self._update_peak_indicator()
+        finally:
+            try:
+                self._peak_job = self.root.after(30_000, self._tick_peak)
+            except tk.TclError:
+                pass
+
+    def _show_peak_tip(self, _e=None):
+        try:
+            if getattr(self, '_peak_tip', None) is not None:
+                return
+            tip = tk.Toplevel(self.root)
+            tip.overrideredirect(True)
+            tip.attributes('-topmost', True)
+            tip.configure(bg=BG3)
+            tk.Label(tip, text=self._peak_tip_text(), bg=BG3, fg=WHITE,
+                     font=('Segoe UI', 7), justify='left', padx=8, pady=6).pack()
+            x = self._peak_lbl.winfo_rootx()
+            y = self._peak_lbl.winfo_rooty() + self._peak_lbl.winfo_height() + 4
+            tip.geometry(f'+{x}+{y}')
+            self._peak_tip = tip
+        except tk.TclError:
+            pass
+
+    def _hide_peak_tip(self, _e=None):
+        try:
+            tip = getattr(self, '_peak_tip', None)
+            self._peak_tip = None
+            if tip is not None:
+                tip.destroy()
+        except tk.TclError:
+            pass
 
     def _fmt(self, usd):
         """Format a USD float according to current currency."""
@@ -1675,6 +1800,7 @@ class Dashboard:
     def _update_ui(self, data):
         now = self._now().strftime('%H:%M:%S')
         self._last_data = data
+        self._update_peak_indicator()
 
         if data.get('error') == 'no_key':
             self._dot.config(fg=YELLOW); self._status.config(text='No Key Set', fg=YELLOW)
@@ -1779,6 +1905,7 @@ class Dashboard:
                 cost_lbl.config(text='', fg=GRAY)
 
         self._time_lbl.config(text=f'↻ {now}   Right-click for more options')
+        self._update_peak_indicator()
 
     # ── Refresh ───────────────────────────────────────────────────────────────
 
@@ -1824,6 +1951,16 @@ class Dashboard:
 
     def _schedule_refresh(self):
         self._trigger_refresh()
+        self._update_peak_indicator()
+        try:
+            if getattr(self, '_peak_job', None) is not None:
+                try:
+                    self.root.after_cancel(self._peak_job)
+                except Exception:
+                    pass
+            self._peak_job = self.root.after(30_000, self._tick_peak)
+        except tk.TclError:
+            pass
 
     def _quit(self):
         if hasattr(self, '_job') and self._job is not None:
@@ -1831,6 +1968,13 @@ class Dashboard:
                 self.root.after_cancel(self._job)
             except Exception:
                 pass
+        if getattr(self, '_peak_job', None) is not None:
+            try:
+                self.root.after_cancel(self._peak_job)
+            except Exception:
+                pass
+            self._peak_job = None
+        self._hide_peak_tip()
         try:
             self.root.destroy()
         except tk.TclError:
