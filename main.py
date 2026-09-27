@@ -393,6 +393,11 @@ def _decrypt_value(value, max_layers=3):
             return token, ('legacy' if (legacy or layers > 1) else 'ok')
     return value, 'stuck'
 
+def _as_secret(value):
+    """Config secret as a stripped string; a non-string (e.g. JSON null) reads
+    as empty so a hand-edited config can't crash the refresh thread."""
+    return value.strip() if isinstance(value, str) else ''
+
 def _as_key_list(value):
     """Normalize extra_keys, which hand-edited configs may store as a plain
     string (encrypting per character would destroy it) or not a list at all."""
@@ -431,12 +436,21 @@ def _refresh_interval_ms(refresh_sec, default=60):
     return max(10, sec) * 1000
 
 def _currency_rate(value, default=1.0):
-    """USD→display FX rate; non-numeric or non-positive values fall back to default."""
+    """USD→display FX rate; non-numeric, non-positive, and infinite values
+    fall back to default so amounts never render as 'inf'. (nan was already
+    rejected by the positivity test, since every nan comparison is False.)"""
     try:
         rate = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
-    return rate if rate > 0 else default
+    return rate if 0 < rate < float('inf') else default
+
+def _sanitize_rate_field(value, current):
+    """Validated rate for the Settings field: keep `current` unless the input
+    is a usable positive finite rate. Guards the write path too — persisting
+    inf/1e400 would emit the non-standard JSON literal `Infinity`."""
+    rate = _currency_rate(value, default=0.0)
+    return rate if rate > 0 else current
 
 def _decrypt_values(values, encrypt):
     """Decrypt a list of sensitive values.
@@ -533,11 +547,11 @@ def load_config():
             migrating_to_cny = True
             needs_resave = True
         if 'cny_rate' in raw and (migrating_to_cny or d.get('currency') == 'CNY'):
-            if 'currency_rate' not in raw or float(raw.get('currency_rate') or 1.0) == 1.0:
+            if 'currency_rate' not in raw or _currency_rate(raw.get('currency_rate')) == 1.0:
                 try:
                     d['currency_rate'] = float(raw['cny_rate'])
                     needs_resave = True
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, OverflowError):
                     pass
         if 'cny_mode' in d or 'cny_rate' in d:
             d.pop('cny_mode', None)
@@ -1467,11 +1481,8 @@ class Dashboard:
             self.cfg['currency'] = cur
             if cur != 'USD':
                 self.cfg['last_currency'] = cur
-            try:
-                rate = float(rate_var.get().strip())
-                if rate > 0:
-                    self.cfg['currency_rate'] = rate
-            except ValueError: pass
+            self.cfg['currency_rate'] = _sanitize_rate_field(
+                rate_var.get().strip(), self.cfg.get('currency_rate', 1.0))
             self.cfg['timezone'] = tz_var.get().strip()
             save_config(self.cfg)
             # Apply new timezone immediately
@@ -1486,7 +1497,7 @@ class Dashboard:
 
     def _open_daily_popup(self):
         bd = getattr(self, '_daily_breakdown', {})
-        no_mgmt = not self.cfg.get('mgmt_key', '').strip()
+        no_mgmt = not _as_secret(self.cfg.get('mgmt_key'))
 
         dlg = tk.Toplevel(self.root)
         dlg.title('Monthly Daily Usage')
@@ -1723,7 +1734,7 @@ class Dashboard:
         return top3, top3_latest, daily_breakdown
 
     def _fetch(self):
-        key = self.cfg.get('api_key', '').strip()
+        key = _as_secret(self.cfg.get('api_key'))
         if not _usable_secret(key):
             return {'error': 'no_key'}
         headers = {'Authorization': f'Bearer {key}'}
@@ -1763,7 +1774,7 @@ class Dashboard:
         # 2. Credits, extra keys, and activity are independent: fetch them (and each
         #    extra key) concurrently so one slow or retrying endpoint no longer makes
         #    the whole refresh cycle wait on the sum of all timeouts/retries.
-        mgmt_key = self.cfg.get('mgmt_key', '').strip()
+        mgmt_key = _as_secret(self.cfg.get('mgmt_key'))
         if not _usable_secret(mgmt_key):
             mgmt_key = ''
         with ThreadPoolExecutor(max_workers=min(8, 2 + len(extra_keys))) as pool:
@@ -1889,7 +1900,7 @@ class Dashboard:
         latest_date = data.get('top3_latest_date', '')
         title = f'Monthly TOP 3 ({latest_date})' if latest_date else 'Monthly TOP 3 Models'
         self._top3_title.config(text=title)
-        no_mgmt = not self.cfg.get('mgmt_key', '').strip()
+        no_mgmt = not _as_secret(self.cfg.get('mgmt_key'))
         for i, (name_lbl, cost_lbl) in enumerate(self._top3_lbls):
             if i == 0 and no_mgmt:
                 name_lbl.config(text='Enter Management Key in Settings', fg=GRAY)
@@ -1928,7 +1939,16 @@ class Dashboard:
         threading.Thread(target=self._worker, args=(rid,), daemon=True).start()
 
     def _worker(self, rid):
-        data = self._fetch()
+        try:
+            data = self._fetch()
+        except Exception as e:
+            # Never let an unexpected error kill the thread: without a result
+            # the refresh chain is never rescheduled and the UI stays stuck on
+            # "Refreshing..." forever. Fall back to the exception type because
+            # str(e) can be empty (e.g. KeyError), and an empty 'error' is
+            # falsy — it would slip through to the success path and report
+            # "Connected" with all-zero spend.
+            data = {'error': str(e) or type(e).__name__}
         try:
             self.root.after(0, lambda: self._on_fetch_done(data, rid))
         except tk.TclError:
@@ -1939,6 +1959,11 @@ class Dashboard:
             return  # Stale fetch; a newer refresh is in flight
         try:
             self._update_ui(data)
+        except tk.TclError:
+            return
+        except Exception:
+            pass
+        try:
             if hasattr(self, '_job') and self._job is not None:
                 try:
                     self.root.after_cancel(self._job)

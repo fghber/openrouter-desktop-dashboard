@@ -148,6 +148,29 @@ cython_debug/
 # Editors
 .vscode/
 .idea/
+*.code-workspace
+
+# Coding Agents
+.claude/
+.codex/
+.cursor/
+.gemini/
+.copilot/
+.opencode/
+.aider*
+.continue/
+.windsurf/
+.codeium/
+.roo/
+.kiro/
+.augment/
+.cline/
+.trae/
+.qwen/
+.iflow/
+.agents/
+.mcp.json
+.cline.json
 
 # Vagrant
 .vagrant/
