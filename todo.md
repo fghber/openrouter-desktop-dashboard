@@ -2,7 +2,7 @@
 
 Candidates from the 2026-09-15 repro-gate review that were **not** confirmed with a failing production-path test, but still look plausible. Do not treat these as findings until they reproduce.
 
-Confirmed/fixed issues live in `findings-log.md`.
+Confirmed/fixed issues live in `changelog.md` (`## [Unreleased]` → `### Fixed`).
 
 ## Product / data
 
@@ -59,13 +59,6 @@ Confirmed/fixed issues live in `findings-log.md`.
 
 ### `run.vbs` Python version
 - Message still says “Install Python 3.9+”. App uses `float | None` (3.10+) and README/AGENTS say 3.10+. Cosmetic unless someone installs 3.9 from that prompt and hits `TypeError` on import.
-
-## Partial (code path real; encrypt round-trip not run here)
-
-### `encrypt_keys: null` rewriting ciphertext as plaintext
-- **Proven:** `load_config` now coerces non-boolean `encrypt_keys` to `true` (`test_null_encrypt_keys_coerced_to_true`).
-- **Unproven here:** `test_null_encrypt_keys_does_not_plaintext_resave` skipped — `cryptography` was not installed, so the old “decrypt then save plaintext” path was not re-run with a live Fernet token.
-- **To confirm:** `pip install cryptography` and run that test.
 
 ## Out of scope / discarded
 Do not reopen without new evidence:
