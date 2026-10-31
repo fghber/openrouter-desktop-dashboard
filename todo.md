@@ -7,10 +7,8 @@ Confirmed/fixed issues live in `changelog.md` (`## [Unreleased]` → `### Fixed`
 ## Product / data
 
 ### Stale FX rate when changing currency in Settings
-- **Why it might be real:** Saving Settings writes `currency` from the combobox and `currency_rate` from the rate field as-is. Changing CNY → EUR does not clear or refetch the rate, so a leftover `7.2` can be applied to euros.
+- **Fixed 2026-09-28**: `tests/test_repro_gate_20260927.py::TestSettingsStaleRateOnCurrencyChange` — `_save` in `main.py` now ignores the stale rate field when the currency changed and blocking-fetches a fresh rate (`USD` → `1.0`; fetch failure → `1.0` + `?` marker). Same-currency saves still honor the hand-edited field.
 - **Where:** `_open_settings` → nested `_save` in `main.py` (currency / `rate_var`); rate field is only updated by “↻ Fetch” or by hand.
-- **To confirm:** UI test or extract `_save`: start CNY @ 7.2, switch combobox to EUR, Save without Fetch, assert displayed amounts (or stored `currency_rate`) are not still 7.2.
-- **Possible fix:** On currency change, set USD rate to `1.0`; for any other currency reset the field and/or auto-fetch.
 
 ### Activity list truncated at 1000 rows
 - **Why it might be real:** `_fetch_activity` requests `params={'limit': 1000}` with no pagination. Heavy accounts could undercount TOP 3 and the daily popup.
@@ -25,16 +23,8 @@ Confirmed/fixed issues live in `changelog.md` (`## [Unreleased]` → `### Fixed`
 - **Possible fix:** If product intent is local month, filter with configured tz; if UTC, label the popup “UTC month”.
 
 ### HTTP 5xx not retried on credits / extra keys
-- **Why it might be real:** `_fetch_credits` and `_fetch_extra_key_usage` retry only on exceptions. Non-200 (including 500/429) `break`s immediately. Transient OpenRouter errors then show `——` balance or silently drop an extra key’s usage.
-- **Where:** `_fetch_credits` (3 attempts), `_fetch_extra_key_usage` (2 attempts). Main `/auth/key` is the same pattern for HTTP errors.
-- **To confirm:** Mock 500 then 200 on `/credits` or an extra `/auth/key`; today the 200 is never used.
-- **Possible fix:** Retry 429/5xx with the existing backoff; still fail fast on 401.
-
-### `alpha` not clamped and not in Settings
-- **Why it might be real:** `_setup_window` applies `self.cfg.get('alpha', 0.95)` with no 0.1–1.0 clamp. `alpha: 0` would make the window invisible. README still describes a right-click transparency control; `_ctx_menu` has none.
-- **Where:** `_setup_window`, `_ctx_menu`; README Usage table.
-- **To confirm:** Load `alpha: 0` / `alpha: 1.5` and see window + Tk errors. Decide whether missing menu is a docs bug or a missing feature.
-- **Possible fix:** Clamp on load; restore a simple transparency entry, or drop the README claim.
+- **Fixed 2026-09-28**: `tests/test_repro_gate_20260927.py::TestHttpErrorNoRetry` — `_fetch_credits` and `_fetch_extra_key_usage` in `main.py` now retry transient 429/5xx within the existing attempt budget (honoring `Retry-After` on 429, capped at 10s) while 401 and other client errors fail fast.
+- **Where:** `_fetch_credits` (3 attempts), `_fetch_extra_key_usage` (2 attempts). Main `/auth/key` and `/activity` keep the existing fail-fast pattern (out of scope).
 
 ### Legacy activity token field names
 - **Why it might be real:** Code reads `prompt_tokens` / `completion_tokens` only. Changelog notes a rename from `tokens_prompt` / `tokens_completion`. Mixed or old payloads would show **0 tokens** with non-zero cost.

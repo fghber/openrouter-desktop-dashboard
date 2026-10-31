@@ -452,6 +452,53 @@ def _sanitize_rate_field(value, current):
     rate = _currency_rate(value, default=0.0)
     return rate if rate > 0 else current
 
+def _is_retryable_http_status(code):
+    """Transient server errors worth retrying within the existing attempt
+    budget; auth/client errors (401/400/403/404) fail fast."""
+    try:
+        code = int(code)
+    except (TypeError, ValueError):
+        return False
+    return code == 429 or 500 <= code <= 599
+
+def _http_retry_delay(resp, default):
+    """Seconds to wait before retrying; honors Retry-After on 429 (capped)."""
+    try:
+        raw = resp.headers.get('Retry-After')
+    except Exception:
+        return default
+    if raw is None:
+        return default
+    try:
+        return min(10.0, max(0.0, float(raw)))
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+def _window_alpha(value, default=0.93):
+    """Window opacity clamped to Tk's usable 0.1–1.0 range; anything
+    non-numeric falls back to the default. A non-numeric string reaches
+    `wm attributes -alpha` verbatim and crashes startup with a TclError, and
+    0.0 makes the window invisible and unreachable."""
+    try:
+        alpha = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    if alpha != alpha:  # nan: every comparison is False
+        return default
+    return min(1.0, max(0.1, alpha))
+
+def _window_pos(value):
+    """Window x/y as an int for the Tk geometry string, or None for
+    auto-position. A string raises TypeError in the geometry max() clamp and
+    a float raises TclError ('bad geometry specifier')."""
+    try:
+        pos = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if pos != pos or pos in (float('inf'), float('-inf')):
+        return None
+    return int(pos)
+
 def _decrypt_values(values, encrypt):
     """Decrypt a list of sensitive values.
 
@@ -532,6 +579,10 @@ def load_config():
                 d.update(raw)
         except Exception:
             pass
+    if not isinstance(raw, dict):
+        # A config.json holding a valid JSON non-object (corrupt or
+        # hand-edited, e.g. `[]`) must not crash the raw.get() checks below.
+        raw = {}
     # Migrate old cny_mode/cny_rate → currency/currency_rate.
     # Defaults always set currency='USD' and currency_rate=1.0 before merge, so
     # detect legacy files by the presence of cny_* keys in the raw file.
@@ -560,6 +611,9 @@ def load_config():
     if not d.get('currency'):
         d['currency'] = 'USD'
     d['currency_rate'] = _currency_rate(d.get('currency_rate'))
+    d['alpha'] = _window_alpha(d.get('alpha'))
+    d['x'] = _window_pos(d.get('x'))
+    d['y'] = _window_pos(d.get('y'))
     try:
         d['refresh_sec'] = max(10, int(float(d.get('refresh_sec') or 60)))
     except (TypeError, ValueError, OverflowError):
@@ -1478,11 +1532,39 @@ class Dashboard:
             try: self.cfg['refresh_sec'] = max(10, int(rv.get().strip()))
             except ValueError: pass
             cur = currency_var.get().strip() or 'USD'
+            old = self.cfg.get('currency') or 'USD'
             self.cfg['currency'] = cur
             if cur != 'USD':
                 self.cfg['last_currency'] = cur
-            self.cfg['currency_rate'] = _sanitize_rate_field(
-                rate_var.get().strip(), self.cfg.get('currency_rate', 1.0))
+            if cur != old:
+                # Currency changed: the rate field still shows the old
+                # currency's rate, so ignore it and fetch a fresh one
+                # (blocking, per product decision). On failure fall back to
+                # 1.0 with a '?' marker instead of applying a stale rate.
+                if cur == 'USD':
+                    self.cfg['currency_rate'] = 1.0
+                    try:
+                        rate_var.set('1.0')
+                    except Exception:
+                        pass
+                else:
+                    fetched = fetch_exchange_rate(cur)
+                    rate = _currency_rate(fetched, default=0.0)
+                    if rate > 0:
+                        self.cfg['currency_rate'] = rate
+                        try:
+                            rate_var.set(f'{rate:.4f}')
+                        except Exception:
+                            pass
+                    else:
+                        self.cfg['currency_rate'] = 1.0
+                        try:
+                            rate_var.set('?')
+                        except Exception:
+                            pass
+            else:
+                self.cfg['currency_rate'] = _sanitize_rate_field(
+                    rate_var.get().strip(), self.cfg.get('currency_rate', 1.0))
             self.cfg['timezone'] = tz_var.get().strip()
             save_config(self.cfg)
             # Apply new timezone immediately
@@ -1650,7 +1732,9 @@ class Dashboard:
 
     def _fetch_credits(self, headers):
         """Credits API: balance + historical total spend (account level, any key returns same result).
-        Returns (balance, global_total_usage); both None = credits fetch failed (distinct from real $0)."""
+        Returns (balance, global_total_usage); both None = credits fetch failed (distinct from real $0).
+        Transient 429/5xx are retried within the attempt budget; 401 and other
+        client errors fail fast."""
         balance = None
         global_total_usage = None
         for attempt in range(3):
@@ -1663,6 +1747,10 @@ class Dashboard:
                     used    = float(cd.get('total_usage',   0) or 0)
                     balance = granted - used
                     global_total_usage = used
+                    break
+                if _is_retryable_http_status(rc.status_code) and attempt < 2:
+                    time.sleep(_http_retry_delay(rc, 2))
+                    continue
                 break
             except Exception:
                 if attempt < 2:
@@ -1670,7 +1758,9 @@ class Dashboard:
         return balance, global_total_usage
 
     def _fetch_extra_key_usage(self, key):
-        """One extra key's (usage_daily, usage_monthly); (0.0, 0.0) when the key can't be fetched."""
+        """One extra key's (usage_daily, usage_monthly); (0.0, 0.0) when the key can't be fetched.
+        Transient 429/5xx are retried within the attempt budget; 401 and other
+        client errors fail fast."""
         for attempt in range(2):
             try:
                 rk = requests.get('https://openrouter.ai/api/v1/auth/key',
@@ -1680,6 +1770,9 @@ class Dashboard:
                     kd = rk.json().get('data', {})
                     return (float(kd.get('usage_daily',   0) or 0),
                             float(kd.get('usage_monthly', 0) or 0))
+                if _is_retryable_http_status(rk.status_code) and attempt < 1:
+                    time.sleep(_http_retry_delay(rk, 1))
+                    continue
                 break
             except Exception:
                 if attempt < 1:
