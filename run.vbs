@@ -19,7 +19,7 @@ py = Which("pythonw.exe")
 If py = "" Then py = Which("python.exe")
 If py = "" Then
   MsgBox "Python not found on PATH." & vbCrLf & vbCrLf & _
-         "Install Python 3.9+, then run:" & vbCrLf & _
+         "Install Python 3.10+, then run:" & vbCrLf & _
          "  pip install -r requirements.txt", 16, "OpenRouter Dashboard"
   WScript.Quit 1
 End If

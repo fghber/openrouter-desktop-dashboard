@@ -465,6 +465,41 @@ class TestFetchSuccess:
         assert daily_breakdown[day1] == {"cost": 1001.0, "tokens": 2002}
         assert "params" not in get.call_args.kwargs
 
+    def test_fetch_activity_accepts_legacy_token_field_names(self):
+        """Activity records using the legacy token names should retain their token totals."""
+        day1, _, _, _ = _activity_dates()
+        response = make_mock_response(json_data={
+            "data": [
+                {"date": day1, "model": "model-a", "usage": 1.0,
+                 "tokens_prompt": 12, "tokens_completion": 8}
+            ]
+        })
+
+        with patch("api.requests.get", return_value=response):
+            _, _, daily_breakdown = api.OpenRouterFetchMixin._fetch_activity(
+                object(), "management-key"
+            )
+
+        assert daily_breakdown[day1]["tokens"] == 20
+
+    def test_fetch_activity_current_zero_token_fields_override_legacy_values(self):
+        """A current-schema zero is valid and must not fall back to legacy token values."""
+        day1, _, _, _ = _activity_dates()
+        response = make_mock_response(json_data={
+            "data": [
+                {"date": day1, "model": "model-a", "usage": 1.0,
+                 "prompt_tokens": 0, "tokens_prompt": 12,
+                 "completion_tokens": 0, "tokens_completion": 8}
+            ]
+        })
+
+        with patch("api.requests.get", return_value=response):
+            _, _, daily_breakdown = api.OpenRouterFetchMixin._fetch_activity(
+                object(), "management-key"
+            )
+
+        assert daily_breakdown[day1]["tokens"] == 0
+
     def test_fetch_activity_filters_by_month(self, tmp_config_dir, mock_requests):
         """Should only include activity items from the current month."""
         self._setup_config(tmp_config_dir, mgmt_key="sk-or-v1-mgmt")

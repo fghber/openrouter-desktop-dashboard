@@ -17,6 +17,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
+import config_store
 import main
 
 
@@ -427,6 +428,22 @@ class TestSaveConfig:
         with open(tmp_config_dir, "r", encoding="utf-8") as f:
             assert f.read() == good_content
         assert not os.path.exists(str(tmp_config_dir) + ".tmp")
+
+    def test_save_fsyncs_temp_file_before_atomic_replace(self, tmp_config_dir):
+        """Flush temp-file contents before replacing the previous config."""
+        calls = []
+        real_replace = os.replace
+        cfg = {"api_key": "", "encrypt_keys": False}
+
+        def replace_and_record(src, dst):
+            calls.append("replace")
+            real_replace(src, dst)
+
+        with patch("config_store.os.fsync", side_effect=lambda _fd: calls.append("fsync")), \
+             patch("config_store.os.replace", side_effect=replace_and_record):
+            main.save_config(cfg)
+
+        assert calls == ["fsync", "replace"]
 
 
 class TestNonObjectConfigJson:

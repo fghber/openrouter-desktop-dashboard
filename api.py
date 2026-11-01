@@ -113,8 +113,14 @@ class OpenRouterFetchMixin:
                             latest_date = day
                         model = g.get('model', '')
                         cost  = float(g.get('usage', 0) or 0)
-                        tok_in  = int(g.get('prompt_tokens', 0) or 0)
-                        tok_out = int(g.get('completion_tokens', 0) or 0)
+                        tok_in_value = g.get('prompt_tokens')
+                        if tok_in_value is None:
+                            tok_in_value = g.get('tokens_prompt', 0)
+                        tok_out_value = g.get('completion_tokens')
+                        if tok_out_value is None:
+                            tok_out_value = g.get('tokens_completion', 0)
+                        tok_in  = int(tok_in_value or 0)
+                        tok_out = int(tok_out_value or 0)
                         if model:
                             model_cost[model] = model_cost.get(model, 0) + cost
                         if day not in daily_breakdown:

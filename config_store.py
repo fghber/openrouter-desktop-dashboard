@@ -328,6 +328,8 @@ def save_config(cfg, config_path=None):
     try:
         with open(tmp_path, 'w', encoding='utf-8') as f:
             json.dump(cfg_to_save, f, indent=2, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(tmp_path, config_path)
     except Exception:
         try:
