@@ -83,9 +83,10 @@ class OpenRouterFetchMixin:
         return 0.0, 0.0
 
     def _fetch_activity(self, mgmt_key):
-        """Activity API: monthly model TOP 3 + daily breakdown.
+        """Activity API: UTC-month model TOP 3 + daily breakdown.
         Activity has audit delay (today's spend often appears tomorrow), so it is
-        only used for monthly details and TOP3, not for the daily/monthly spend cards."""
+        only used for monthly details and TOP3, not for the daily/monthly spend cards.
+        Activity periods use UTC regardless of the display timezone."""
         top3 = []
         top3_latest = ''
         daily_breakdown = {}

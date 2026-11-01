@@ -16,6 +16,7 @@ from unittest.mock import patch, MagicMock, PropertyMock
 
 import pytest
 
+import api
 import main
 
 
@@ -481,6 +482,33 @@ class TestFetchSuccess:
         # top3 should only have model-a
         assert len(result["top3"]) == 1
         assert result["top3"][0][0] == "model-a"
+
+    def test_activity_month_uses_utc_at_configured_timezone_boundary(
+            self, monkeypatch, mock_requests):
+        """Activity analytics stay in August UTC when Auckland is already in September."""
+        class FrozenDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                frozen = datetime(2026, 8, 31, 16, tzinfo=timezone.utc)
+                return frozen.astimezone(tz) if tz else frozen
+
+        monkeypatch.setattr(api, "datetime", FrozenDateTime)
+        monkeypatch.setattr(main, "datetime", FrozenDateTime)
+        mock_requests.return_value = make_mock_response(json_data={
+            "data": [
+                {"date": "2026-08-31", "model": "utc-month", "usage": 5.0},
+                {"date": "2026-09-01", "model": "local-month", "usage": 10.0},
+            ]
+        })
+        dashboard = main.Dashboard.__new__(main.Dashboard)
+        dashboard.cfg = {"timezone": "Pacific/Auckland"}
+        dashboard._tz = main.resolve_tz(dashboard.cfg["timezone"])
+
+        assert dashboard._now().strftime("%Y-%m") == "2026-09"
+        top3, _, daily_breakdown = dashboard._fetch_activity("test-management-key")
+
+        assert top3 == [("utc-month", 5.0)]
+        assert list(daily_breakdown) == ["2026-08-31"]
 
     def test_fetch_activity_empty_data(self, tmp_config_dir, mock_requests):
         """Should handle empty activity data gracefully."""

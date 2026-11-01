@@ -525,7 +525,7 @@ class TestUpdateUiSuccess:
 
         # Title should include the date
         d._top3_title.config.assert_called_with(
-            text="Monthly TOP 3 (2026-08-15)"
+            text="Monthly TOP 3 (UTC, 2026-08-15)"
         )
 
         # First top3 entry
@@ -644,6 +644,7 @@ class TestNullManagementKeyPopup:
         d._open_daily_popup()  # must not raise
 
         fake_tk.Toplevel.return_value.title.assert_called_once_with(
-            "Monthly Daily Usage")
+            "Monthly Daily Usage (UTC)")
         texts = [c.kwargs.get("text") for c in fake_tk.Label.call_args_list]
+        assert any("Monthly Daily Usage (UTC)" in (t or "") for t in texts), texts
         assert any("Management Key" in (t or "") for t in texts), texts

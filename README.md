@@ -108,7 +108,9 @@ The executable will be generated in the `dist` folder.
 **Note on data history**: The daily breakdown shown in the Monthly Details
 popup comes from the OpenRouter `/activity` endpoint, which only returns
 activity for the **last 30 (completed) UTC days**. Days older than that cannot
-be displayed.
+be displayed. The popup and monthly TOP 3 include activity from the current
+**UTC calendar month**; the configured timezone affects date formatting, not
+the month boundary.
 
 ## Notes
 

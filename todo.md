@@ -6,25 +6,11 @@ Confirmed/fixed issues live in `changelog.md` (`## [Unreleased]` → `### Fixed`
 
 ## Product / data
 
-### Stale FX rate when changing currency in Settings
-- **Fixed 2026-09-28**: `tests/test_repro_gate_20260927.py::TestSettingsStaleRateOnCurrencyChange` — `_save` in `main.py` now ignores the stale rate field when the currency changed and blocking-fetches a fresh rate (`USD` → `1.0`; fetch failure → `1.0` + `?` marker). Same-currency saves still honor the hand-edited field.
-- **Where:** `_open_settings` → nested `_save` in `main.py` (currency / `rate_var`); rate field is only updated by “↻ Fetch” or by hand.
-
 ### Activity list truncated at 1000 rows
 - **Why it might be real:** `_fetch_activity` requests `params={'limit': 1000}` with no pagination. Heavy accounts could undercount TOP 3 and the daily popup.
 - **Where:** `Dashboard._fetch_activity`.
 - **To confirm:** Live OpenRouter `/activity` (or a fixture with `>1000` rows plus documented paging). Check whether the API supports `offset` / cursor / extra pages.
 - **Possible fix:** Page until a short page, or document the cap in the UI/README.
-
-### UTC month vs configured timezone
-- **Why it might be real:** Activity filtering uses `datetime.now(timezone.utc)` → `YYYY-MM`, while the rest of the UI uses `resolve_tz(config timezone)`. Near month boundaries (e.g. UTC+12 early on the 1st), TOP 3 / daily popup can show the other calendar month vs the clock.
-- **Where:** `_fetch_activity` `month_prefix` vs `_now()`.
-- **To confirm:** Freeze time at a boundary (e.g. 2026-09-01 04:00 `Pacific/Auckland` = still August UTC) with mixed-month activity dates; compare popup vs “Monthly Spend” (`usage_monthly`). README already says activity is last-30 **UTC** days — may be design, not a bug.
-- **Possible fix:** If product intent is local month, filter with configured tz; if UTC, label the popup “UTC month”.
-
-### HTTP 5xx not retried on credits / extra keys
-- **Fixed 2026-09-28**: `tests/test_repro_gate_20260927.py::TestHttpErrorNoRetry` — `_fetch_credits` and `_fetch_extra_key_usage` in `main.py` now retry transient 429/5xx within the existing attempt budget (honoring `Retry-After` on 429, capped at 10s) while 401 and other client errors fail fast.
-- **Where:** `_fetch_credits` (3 attempts), `_fetch_extra_key_usage` (2 attempts). Main `/auth/key` and `/activity` keep the existing fail-fast pattern (out of scope).
 
 ### Legacy activity token field names
 - **Why it might be real:** Code reads `prompt_tokens` / `completion_tokens` only. Changelog notes a rename from `tokens_prompt` / `tokens_completion`. Mixed or old payloads would show **0 tokens** with non-zero cost.
@@ -52,6 +38,7 @@ Confirmed/fixed issues live in `changelog.md` (`## [Unreleased]` → `### Fixed`
 
 ## Out of scope / discarded
 Do not reopen without new evidence:
+- Activity analytics use the UTC calendar month; the UI and README now identify this period explicitly.
 - `resolve_tz("24")` / `"25"` — no crash; falls back to system local.
 - `limit: 0` → “No Quota Limit” — current behavior, no crash.
 - `_format_date_locale` `%-m` after `%m` — no current locale pattern uses unpadded forms.

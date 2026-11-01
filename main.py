@@ -1251,7 +1251,7 @@ class Dashboard(OpenRouterFetchMixin):
         no_mgmt = not _as_secret(self.cfg.get('mgmt_key'))
 
         dlg = tk.Toplevel(self.root)
-        dlg.title('Monthly Daily Usage')
+        dlg.title('Monthly Daily Usage (UTC)')
         dlg.configure(bg=BG2)
         dlg.resizable(False, False)
         dlg.attributes('-topmost', True)
@@ -1262,7 +1262,7 @@ class Dashboard(OpenRouterFetchMixin):
         hdr = tk.Frame(dlg, bg=ACCENT, height=28)
         hdr.pack(fill='x')
         hdr.pack_propagate(False)
-        tk.Label(hdr, text='📊 Monthly Daily Usage',
+        tk.Label(hdr, text='📊 Monthly Daily Usage (UTC)',
                  bg=ACCENT, fg=WHITE, font=('Segoe UI', 10, 'bold')).pack(side='left', padx=10)
         close_lbl = tk.Label(hdr, text='✕', bg=ACCENT, fg=WHITE,
                  font=('Segoe UI', 9), cursor='hand2', padx=8)
@@ -1293,7 +1293,7 @@ class Dashboard(OpenRouterFetchMixin):
                 elif retries < 20:
                     dlg.after(500, lambda: _poll_data(retries + 1))
                 else:
-                    loading_lbl.config(text='No activity data this month\n(activity API has audit delay,\ntoday\'s spend usually appears tomorrow)',
+                    loading_lbl.config(text='No activity data this UTC month\n(activity API has audit delay,\ntoday\'s spend usually appears tomorrow)',
                                        fg=YELLOW)
 
             # Trigger background refresh
@@ -1495,7 +1495,8 @@ class Dashboard(OpenRouterFetchMixin):
 
         top3 = data.get('top3', [])
         latest_date = data.get('top3_latest_date', '')
-        title = f'Monthly TOP 3 ({latest_date})' if latest_date else 'Monthly TOP 3 Models'
+        title = (f'Monthly TOP 3 (UTC, {latest_date})' if latest_date
+                 else 'Monthly TOP 3 Models (UTC)')
         self._top3_title.config(text=title)
         no_mgmt = not _as_secret(self.cfg.get('mgmt_key'))
         for i, (name_lbl, cost_lbl) in enumerate(self._top3_lbls):
