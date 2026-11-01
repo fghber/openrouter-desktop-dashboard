@@ -4,16 +4,18 @@
 This is a small Windows desktop dashboard built with `tkinter` for monitoring OpenRouter usage and spend. The app runs from a single Python entrypoint, `main.py`, and uses `requests` to fetch OpenRouter API data.
 
 ## Key files
-- `main.py` — single-source application logic, UI, config handling, API integration, refresh scheduling, and tray-like behavior.
+- `main.py` — Tkinter application entrypoint, dashboard UI, and refresh scheduling.
+- `api.py` — OpenRouter request/retry and usage aggregation methods.
+- `config_store.py` — config loading/saving, validation, and machine-key encryption.
 - `config.example.json` — reference config schema for runtime settings.
 - `requirements.txt` — dependency list containing `requests`.
 - `README.md` — user-facing usage and packaging instructions.
 
 ## Recommended agent behavior
-- Treat `main.py` as the authoritative source of app behavior, not as a library package.
-- Preserve the single-file structure unless the user explicitly asks to refactor into modules.
+- Treat `main.py` as the application entrypoint and preserve its existing import surface when changing behavior.
+- Keep API transport and config persistence in their dedicated modules; avoid splitting the Tkinter UI into extra layers without a concrete need.
 - Keep Windows-specific UI code intact: `enable_window_effects`, `sys.frozen` handling, and `tkinter` window attributes are central to the UX.
-- When changing config behavior, update both `config.example.json` and runtime handling in `main.py`.
+- When changing config behavior, update both `config.example.json` and runtime handling in `config_store.py`.
 - Avoid introducing new runtime dependencies unless the user explicitly requests them.
 
 ## Runtime and development

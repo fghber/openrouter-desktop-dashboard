@@ -19,6 +19,12 @@ import pytest
 import main
 
 
+def _dashboard_with_cfg(cfg):
+    dashboard = main.Dashboard.__new__(main.Dashboard)
+    dashboard.cfg = cfg
+    return dashboard
+
+
 def make_mock_label():
     """Create a mock label that records config() calls."""
     label = MagicMock()
@@ -621,3 +627,23 @@ class TestUpdateUiSuccess:
         # Time label should contain "Right-click for more options"
         time_call = d._time_lbl.config.call_args
         assert "Right-click for more options" in str(time_call)
+
+
+class TestNullManagementKeyPopup:
+    """A missing management key is explained in the daily usage popup."""
+
+    def test_null_mgmt_key_daily_popup_reports_missing_key(self, monkeypatch):
+        """_open_daily_popup must treat a null mgmt_key as 'not configured'
+        instead of raising AttributeError on None.strip()."""
+        fake_tk = MagicMock()
+        monkeypatch.setattr(main, "tk", fake_tk)
+        d = _dashboard_with_cfg({"mgmt_key": None})
+        d.root = MagicMock()
+        d._daily_breakdown = {"2026-09-01": {"cost": 1.0, "tokens": 10}}
+
+        d._open_daily_popup()  # must not raise
+
+        fake_tk.Toplevel.return_value.title.assert_called_once_with(
+            "Monthly Daily Usage")
+        texts = [c.kwargs.get("text") for c in fake_tk.Label.call_args_list]
+        assert any("Management Key" in (t or "") for t in texts), texts

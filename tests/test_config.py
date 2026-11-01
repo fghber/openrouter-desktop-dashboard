@@ -12,6 +12,7 @@ Covers:
 """
 import json
 import os
+from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -426,3 +427,51 @@ class TestSaveConfig:
         with open(tmp_config_dir, "r", encoding="utf-8") as f:
             assert f.read() == good_content
         assert not os.path.exists(str(tmp_config_dir) + ".tmp")
+
+
+class TestNonObjectConfigJson:
+    @pytest.mark.parametrize("payload", ['[]', '"just a string"', '42', 'null', 'true'])
+    def test_non_object_config_falls_back_to_defaults(self, tmp_config_dir, payload):
+        Path(tmp_config_dir).write_text(payload, encoding='utf-8')
+        cfg, stuck, key_changed = main.load_config()
+        assert cfg['api_key'] == ''
+        assert cfg['currency'] == 'USD'
+        assert cfg['refresh_sec'] == 60
+
+
+class TestWindowFieldSanitization:
+    @pytest.mark.parametrize("raw_alpha, expected", [
+        (None, 0.93),        # JSON null → default, not a Tk TclError
+        ("abc", 0.93),       # non-numeric → default
+        (0, 0.1),            # fully invisible window is unreachable → floor
+        (1.5, 1.0),          # above Tk's range → clamp
+        ("0.5", 0.5),        # numeric string is unambiguous → accept
+        (0.87, 0.87),        # valid value passes through
+    ])
+    def test_alpha_sanitized_on_load(self, tmp_config_dir, raw_alpha, expected):
+        with open(tmp_config_dir, "w", encoding="utf-8") as f:
+            json.dump({"alpha": raw_alpha}, f)
+        cfg = main.load_config()[0]
+        assert cfg["alpha"] == pytest.approx(expected)
+
+    @pytest.mark.parametrize("raw_x, expected", [
+        ("100", 100),        # numeric string → int, not TypeError in max()
+        (12.9, 12),          # float → int for the geometry string
+        ("abc", None),       # garbage → auto-position
+        (None, None),        # already the "auto" sentinel
+    ])
+
+    def test_x_sanitized_on_load(self, tmp_config_dir, raw_x, expected):
+        with open(tmp_config_dir, "w", encoding="utf-8") as f:
+            json.dump({"x": raw_x}, f)
+        cfg = main.load_config()[0]
+        assert cfg["x"] == expected
+
+    def test_infinite_x_and_alpha_fall_back(self, tmp_config_dir):
+        # Python's json round-trips inf/NaN via the non-standard literals
+        # Infinity/NaN, so they can genuinely appear in a config file.
+        Path(tmp_config_dir).write_text(
+            '{"x": Infinity, "alpha": NaN}', encoding="utf-8")
+        cfg = main.load_config()[0]
+        assert cfg["x"] is None
+        assert cfg["alpha"] == pytest.approx(0.93)

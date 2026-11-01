@@ -6,9 +6,29 @@ _fmt2: formats with 2 decimal places (used for balance / limit)
 
 Both methods depend on self.cfg['currency'] and self.cfg['currency_rate'].
 """
+import json
+
 import pytest
 
 import main
+
+
+def _dashboard_with_cfg(cfg):
+    dashboard = main.Dashboard.__new__(main.Dashboard)
+    dashboard.cfg = cfg
+    return dashboard
+
+
+_BASE_CFG = {
+    "refresh_sec": 60, "alpha": 0.93, "timezone": "", "currency": "USD",
+    "currency_rate": 1.0, "encrypt_keys": False, "extra_keys": [],
+    "mgmt_key": "", "pinned": True, "island_state": "island",
+}
+
+
+def _write_cfg(path, **over):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(dict(_BASE_CFG, **over), f)
 
 
 class TestFmt:
@@ -115,3 +135,36 @@ class TestFmt2:
             result = d._fmt2(10.0)
             assert isinstance(result, str)
             assert len(result) > 0
+
+
+class TestFmtBadRate:
+    """Non-numeric currency_rate crashed _fmt during UI updates."""
+
+    def test_non_numeric_rate_does_not_raise(self):
+        d = _dashboard_with_cfg({"currency": "EUR", "currency_rate": "?"})
+        assert d._fmt(10.0) == "€10.00"
+
+    def test_none_rate_does_not_raise(self):
+        d = _dashboard_with_cfg({"currency": "EUR", "currency_rate": None})
+        assert d._fmt(10.0) == "€10.00"
+
+
+class TestNonFiniteRate:
+    """currency_rate 'inf' is numeric and positive, so it passed the guard and
+    rendered every amount as '€inf'."""
+
+    def test_inf_rate_falls_back_to_default(self):
+        assert main._currency_rate("inf") == 1.0
+        assert main._currency_rate(float("inf")) == 1.0
+
+    def test_nan_rate_falls_back_to_default(self):
+        assert main._currency_rate("nan") == 1.0
+
+    def test_fmt_with_inf_rate_renders_no_inf(self):
+        d = _dashboard_with_cfg({"currency": "EUR", "currency_rate": float("inf")})
+        assert d._fmt(10.0) == "€10.00"
+
+    def test_inf_rate_in_config_does_not_render_inf(self, tmp_config_dir):
+        _write_cfg(tmp_config_dir, api_key="sk", currency="EUR", currency_rate="inf")
+        cfg = main.load_config()[0]
+        assert _dashboard_with_cfg(cfg)._fmt(10.0) == "€10.00"

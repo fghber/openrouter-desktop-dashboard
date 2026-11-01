@@ -16,6 +16,12 @@ A Windows desktop dashboard built with `tkinter` for monitoring OpenRouter usage
 - Configurable refresh rate, window transparency, and timezone
 - Peak/off-peak indicator in the title bar for DeepSeek / Z.ai time-of-use pricing (vendor UTC+8 clock; hover for hours): `◆` red = both peak, `◈` yellow = DeepSeek peak only, `◇` green = both off-peak
 
+## Project structure
+
+- `main.py` starts the Tkinter dashboard and owns its UI and refresh lifecycle.
+- `api.py` contains OpenRouter requests, retries, and usage aggregation.
+- `config_store.py` handles config validation, persistence, and machine-specific key encryption.
+
 ## Installation
 
 1. **Prerequisites**
@@ -231,4 +237,3 @@ Full field list (including `island_state`, `encrypt_keys`, etc.): see **Configur
 pip install pyinstaller
 pyinstaller --onefile --windowed --name OpenRouter-Dashboard main.py
 ```
-

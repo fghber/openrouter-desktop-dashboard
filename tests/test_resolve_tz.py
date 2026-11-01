@@ -104,3 +104,15 @@ class TestResolveTz:
         from zoneinfo import ZoneInfo
         assert isinstance(result, ZoneInfo)
         assert str(result) == "UTC"
+
+
+class TestResolveTzOutOfRange:
+    """Huge/infinite numeric TZ specs raised OverflowError instead of falling back."""
+
+    def test_huge_numeric_offset_does_not_raise(self):
+        result = main.resolve_tz("1e20")
+        assert result is not None
+
+    def test_inf_offset_does_not_raise(self):
+        result = main.resolve_tz("inf")
+        assert result is not None
