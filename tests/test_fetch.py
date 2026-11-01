@@ -445,6 +445,26 @@ class TestFetchSuccess:
         assert result["daily_breakdown"][day2]["cost"] == 3.0
         assert result["daily_breakdown"][day2]["tokens"] == 700
 
+    def test_fetch_activity_handles_more_than_1000_rows(self):
+        """Activity aggregation should process the full response without a request limit."""
+        day1, _, _, _ = _activity_dates()
+        response = make_mock_response(json_data={
+            "data": [
+                {"date": day1, "model": "model-a", "usage": 1.0,
+                 "prompt_tokens": 1, "completion_tokens": 1}
+                for _ in range(1001)
+            ]
+        })
+
+        with patch("api.requests.get", return_value=response) as get:
+            top3, _, daily_breakdown = api.OpenRouterFetchMixin._fetch_activity(
+                object(), "management-key"
+            )
+
+        assert top3 == [("model-a", 1001.0)]
+        assert daily_breakdown[day1] == {"cost": 1001.0, "tokens": 2002}
+        assert "params" not in get.call_args.kwargs
+
     def test_fetch_activity_filters_by_month(self, tmp_config_dir, mock_requests):
         """Should only include activity items from the current month."""
         self._setup_config(tmp_config_dir, mgmt_key="sk-or-v1-mgmt")

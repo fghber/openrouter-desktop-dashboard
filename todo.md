@@ -6,12 +6,6 @@ Confirmed/fixed issues live in `changelog.md` (`## [Unreleased]` → `### Fixed`
 
 ## Product / data
 
-### Activity list truncated at 1000 rows
-- **Why it might be real:** `_fetch_activity` requests `params={'limit': 1000}` with no pagination. Heavy accounts could undercount TOP 3 and the daily popup.
-- **Where:** `Dashboard._fetch_activity`.
-- **To confirm:** Live OpenRouter `/activity` (or a fixture with `>1000` rows plus documented paging). Check whether the API supports `offset` / cursor / extra pages.
-- **Possible fix:** Page until a short page, or document the cap in the UI/README.
-
 ### Legacy activity token field names
 - **Why it might be real:** Code reads `prompt_tokens` / `completion_tokens` only. Changelog notes a rename from `tokens_prompt` / `tokens_completion`. Mixed or old payloads would show **0 tokens** with non-zero cost.
 - **Where:** `_fetch_activity` token fields.

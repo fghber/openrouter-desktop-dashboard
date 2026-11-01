@@ -97,7 +97,6 @@ class OpenRouterFetchMixin:
                 rg = requests.get(
                     'https://openrouter.ai/api/v1/activity',
                     headers={'Authorization': f'Bearer {mgmt_key}'},
-                    params={'limit': 1000},
                     timeout=10,
                 )
                 if rg.status_code == 200:

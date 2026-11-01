@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Auto-migration**: Plaintext keys in existing config are automatically encrypted on first load.
 
 ### Changed
+- **Activity request no longer sends an undocumented row limit**: The OpenRouter `/activity` API schema defines no `limit` parameter; the client now processes the full response array rather than requesting `limit=1000`. Regression coverage verifies aggregation beyond 1,000 returned rows.
 - **Activity analytics timezone clarified**: Monthly TOP 3 and daily usage labels now identify their UTC calendar-month period; the configured timezone continues to affect date formatting only.
 - **Concurrent refresh fetching**: `/credits`, each extra key's `/auth/key`, and `/activity` now run in parallel on a small thread pool (capped at 8 workers, stdlib `concurrent.futures` — no new dependencies) instead of strictly one-after-the-other. Worst-case refresh latency drops from the *sum* of all endpoint timeouts and retries (nearly 3 minutes with 10 unreachable extra keys) to roughly the *slowest single* endpoint (~17s). Extra-key usage sums are order-independent, and results still reach the UI thread through the same stale-guarded `root.after` path.
 - **Python minimum raised to 3.10**: `main.py` uses PEP 604 union syntax (`float | None`) without `from __future__ import annotations`, which raises `TypeError` at import on Python 3.9. README/AGENTS now document Python 3.10+, and the dead `backports.zoneinfo ; python_version < "3.9"` marker was removed from `requirements.txt`.
